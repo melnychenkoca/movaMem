@@ -1,0 +1,171 @@
+import Foundation
+import os
+
+/// Decides when to restore a remembered layout and when to record a new one.
+///
+/// This is the only place the app's behavioral rules live. It performs no OS calls
+/// of its own — everything arrives through the two protocols — which is what makes
+/// it fully testable.
+final class SwitchCoordinator {
+    private let inputSource: InputSourceProviding
+    private let appMonitor: AppMonitoring
+    private let store: LayoutStore
+    private let log = Logger(subsystem: "com.movamem.app", category: "SwitchCoordinator")
+
+    /// The layout ID this app most recently asked the OS to select, or nil.
+    ///
+    /// This is the suppression mechanism, and it is deliberately NOT a boolean.
+    /// Measured Carbon behavior on macOS 26.5:
+    ///   - selecting the already-active layout fires ZERO notifications, so a
+    ///     boolean flag would stay raised forever and the app would stop learning;
+    ///   - one select sometimes delivers TWO notifications, so a boolean would
+    ///     clear on the first and record the second as a user change — the app
+    ///     learning from its own switch.
+    /// Comparing against the layout ID is immune to both: every duplicate matches
+    /// and is ignored, and a stale value is simply overwritten by the next real
+    /// change. No timer is needed.
+    private var layoutWeSelected: String?
+
+    /// Internal bookkeeping only: layouts whose selection failed this session,
+    /// used by this class to decide switching behavior (for example, not
+    /// retrying a select that just failed). The menu deliberately does not
+    /// consult this set for its "(unavailable)" label — it asks the OS fresh
+    /// via availableLayouts() instead, which is authoritative at menu-open
+    /// time and correctly stops flagging a layout the user has since
+    /// reinstalled, which this sticky set would not.
+    private(set) var unavailableLayoutIDs: Set<String> = []
+
+    init(inputSource: InputSourceProviding, appMonitor: AppMonitoring, store: LayoutStore) {
+        self.inputSource = inputSource
+        self.appMonitor = appMonitor
+        self.store = store
+    }
+
+    /// Installs the event callbacks. Nothing happens until this is called.
+    func start() {
+        // [weak self] prevents a retain cycle: these closures are stored on the
+        // objects this class holds, so a strong reference would keep both alive
+        // forever.
+        appMonitor.onAppActivated = { [weak self] bundleID in
+            self?.handleAppActivated(bundleID: bundleID)
+        }
+        inputSource.onLayoutChanged = { [weak self] in
+            self?.handleLayoutChanged()
+        }
+        log.debug("Coordinator started")
+    }
+
+    /// Lets another component declare that it is about to call select() itself,
+    /// so the resulting notification is attributed to the right app.
+    ///
+    /// This exists because `SwitchCoordinator.start()` is not the only place
+    /// that calls `inputSource.select(layoutID:)` — `MenuController.chooseLayout`
+    /// also calls it directly, to apply a layout immediately when the user picks
+    /// it for the app that is currently frontmost. That select() can fire the
+    /// same layout-changed notification our own selects fire (see the comment
+    /// on `layoutWeSelected` above), and `handleLayoutChanged` has no way to
+    /// know which app a notification is "about" — it just reads
+    /// `appMonitor.frontmostBundleID` fresh, at the moment the notification is
+    /// actually delivered.
+    ///
+    /// That distinction matters because delivery is not synchronous with the
+    /// select() call: the notification travels through
+    /// DistributedNotificationCenter, which is cross-process, so there is a
+    /// real window between "the menu called select() for app A" and "the
+    /// notification arrives". If the user switches to app B inside that
+    /// window (for example, by Cmd-Tabbing away right after picking a layout
+    /// in the menu), `handleLayoutChanged` would otherwise see app B as
+    /// frontmost and wrongly record the menu's choice against app B instead
+    /// of app A — silently overwriting whatever layout B had saved, or
+    /// inventing one for a B that had none. This was a reproduced,
+    /// data-losing bug in phase 2, not a theoretical one.
+    ///
+    /// Calling this method before select() tells `handleLayoutChanged` "this
+    /// specific layout ID, whatever app it turns out to be recorded against,
+    /// was caused by us" — the same suppression `handleAppActivated` already
+    /// relies on. The caller is responsible for calling this immediately
+    /// before its own select(), for the same ordering reason documented on
+    /// `handleAppActivated`: the notification can arrive synchronously.
+    func noteLayoutWeAreAboutToSelect(_ layoutID: String) {
+        layoutWeSelected = layoutID
+    }
+
+    /// Cancels a note made by `noteLayoutWeAreAboutToSelect` when the select it
+    /// was announcing did not actually happen.
+    ///
+    /// A failed select fires no notification, so nothing would otherwise clear
+    /// the noted value. It would stay armed and swallow the user's next genuine
+    /// switch to that same layout, losing a preference they really did express.
+    /// `handleAppActivated` clears the value on its own failed select for exactly
+    /// this reason; any other caller of select() must do the same.
+    ///
+    /// Reproduced before this method existed: the menu tried to select an
+    /// uninstalled layout, the select failed, and the user's later hand-switch to
+    /// that layout in a different app recorded nothing at all.
+    func cancelNotedLayout() {
+        layoutWeSelected = nil
+    }
+
+    // MARK: - App activated
+
+    private func handleAppActivated(bundleID: String) {
+        guard let wantedLayout = store.layout(forBundleID: bundleID) else {
+            // First time seeing this app. Do nothing: entries should only ever
+            // reflect a deliberate choice by the user.
+            log.debug("No remembered layout for \(bundleID, privacy: .public)")
+            return
+        }
+
+        if wantedLayout == inputSource.currentLayoutID {
+            // Already correct. Selecting anyway would fire no notification and
+            // leave stale suppression state behind.
+            log.debug("Layout already correct for \(bundleID, privacy: .public)")
+            return
+        }
+
+        log.debug("Restoring \(wantedLayout, privacy: .public) for \(bundleID, privacy: .public)")
+
+        // Record what we are about to do BEFORE doing it: the notification can
+        // arrive synchronously inside select().
+        layoutWeSelected = wantedLayout
+
+        let didSelect = inputSource.select(layoutID: wantedLayout)
+        if didSelect {
+            unavailableLayoutIDs.remove(wantedLayout)
+        } else {
+            // The layout was uninstalled. Keep the entry — it becomes valid again
+            // on reinstall — but mark it so the menu can explain itself.
+            log.error("Could not select \(wantedLayout, privacy: .public); marking unavailable")
+            unavailableLayoutIDs.insert(wantedLayout)
+            layoutWeSelected = nil
+        }
+    }
+
+    // MARK: - Layout changed
+
+    private func handleLayoutChanged() {
+        guard let newLayout = inputSource.currentLayoutID else {
+            log.error("Layout changed but current layout is unknown")
+            return
+        }
+
+        if newLayout == layoutWeSelected {
+            // This app caused this change. Ignore it, and keep the stored value
+            // so any duplicate notification is ignored too.
+            log.debug("Ignoring our own switch to \(newLayout, privacy: .public)")
+            return
+        }
+
+        // A real user change supersedes any stale suppression state.
+        layoutWeSelected = nil
+
+        guard let bundleID = appMonitor.frontmostBundleID else {
+            log.debug("Layout changed with no frontmost app; not recording")
+            return
+        }
+
+        log.debug("Recording \(newLayout, privacy: .public) for \(bundleID, privacy: .public)")
+        store.setLayout(newLayout, forBundleID: bundleID)
+        unavailableLayoutIDs.remove(newLayout)
+    }
+}

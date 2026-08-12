@@ -1,0 +1,455 @@
+import Foundation
+import Testing
+@testable import movaMem
+
+// Each test gets its own temp directory so tests never interfere.
+private func makeTempFileURL() -> URL {
+    let dir = URL(fileURLWithPath: NSTemporaryDirectory())
+        .appendingPathComponent("movamem-test-" + UUID().uuidString)
+    try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    return dir.appendingPathComponent("layouts.json")
+}
+
+@Test func missingFileStartsEmpty() {
+    let store = LayoutStore(fileURL: makeTempFileURL())
+    #expect(store.allEntries().isEmpty)
+    #expect(store.layout(forBundleID: "com.apple.Safari") == nil)
+}
+
+@Test func setThenGetReturnsLayout() {
+    let store = LayoutStore(fileURL: makeTempFileURL())
+    store.setLayout("com.apple.keylayout.Ukrainian-PC", forBundleID: "com.tinyspeck.slackmacgap")
+    #expect(store.layout(forBundleID: "com.tinyspeck.slackmacgap") == "com.apple.keylayout.Ukrainian-PC")
+}
+
+@Test func valuesSurviveReload() {
+    let url = makeTempFileURL()
+    let first = LayoutStore(fileURL: url)
+    first.setLayout("com.apple.keylayout.French", forBundleID: "ru.keepcoder.Telegram")
+
+    // A second store reading the same file must see the persisted value.
+    let second = LayoutStore(fileURL: url)
+    #expect(second.layout(forBundleID: "ru.keepcoder.Telegram") == "com.apple.keylayout.French")
+}
+
+@Test func settingSameBundleIDTwiceOverwrites() {
+    let store = LayoutStore(fileURL: makeTempFileURL())
+    store.setLayout("com.apple.keylayout.Canadian", forBundleID: "com.microsoft.VSCode")
+    store.setLayout("com.apple.keylayout.French", forBundleID: "com.microsoft.VSCode")
+    #expect(store.layout(forBundleID: "com.microsoft.VSCode") == "com.apple.keylayout.French")
+    #expect(store.allEntries().count == 1)
+}
+
+@Test func removeDeletesEntry() {
+    let store = LayoutStore(fileURL: makeTempFileURL())
+    store.setLayout("com.apple.keylayout.Canadian", forBundleID: "com.microsoft.VSCode")
+    store.remove(bundleID: "com.microsoft.VSCode")
+    #expect(store.layout(forBundleID: "com.microsoft.VSCode") == nil)
+    #expect(store.allEntries().isEmpty)
+}
+
+@Test func allEntriesIsSortedByBundleID() {
+    let store = LayoutStore(fileURL: makeTempFileURL())
+    store.setLayout("com.apple.keylayout.Canadian", forBundleID: "zzz.app")
+    store.setLayout("com.apple.keylayout.French", forBundleID: "aaa.app")
+    let entries = store.allEntries()
+    #expect(entries.count == 2)
+    #expect(entries[0].bundleID == "aaa.app")
+    #expect(entries[1].bundleID == "zzz.app")
+}
+
+@Test func malformedJSONStartsEmptyAndQuarantinesFile() throws {
+    let url = makeTempFileURL()
+    try "this is not json at all".write(to: url, atomically: true, encoding: .utf8)
+
+    let store = LayoutStore(fileURL: url)
+    #expect(store.allEntries().isEmpty)
+
+    // The bad file must be renamed aside, never deleted — a parsing bug must not
+    // silently destroy the user's data.
+    let dir = url.deletingLastPathComponent()
+    let names = try FileManager.default.contentsOfDirectory(atPath: dir.path)
+    let quarantined = names.filter { name in name.contains("corrupt") }
+    #expect(quarantined.count == 1)
+}
+
+@Test func schemaVersionIsPersisted() throws {
+    let url = makeTempFileURL()
+    let store = LayoutStore(fileURL: url)
+    store.setLayout("com.apple.keylayout.Canadian", forBundleID: "com.microsoft.VSCode")
+
+    let data = try Data(contentsOf: url)
+    let decoded = try JSONDecoder().decode(StoredLayouts.self, from: data)
+    // Schema version 2, not 1: this test predates the optional-layout change in
+    // this task, which bumped currentSchemaVersion. See writesUseSchemaVersionTwo
+    // for the test the brief added specifically to cover this.
+    #expect(decoded.version == 2)
+    #expect(decoded.apps["com.microsoft.VSCode"] == "com.apple.keylayout.Canadian")
+}
+
+@Test func loadingAnOlderFileUpgradesItsVersionOnTheNextWrite() throws {
+    // Found by running the real store against a copy of the owner's actual v1
+    // file: the null for an unset app was written correctly, but the file kept
+    // claiming "version": 1 forever, because load() adopted the file's own
+    // version and save() wrote it straight back.
+    //
+    // That is a real problem now that v2 introduced nulls: the file would hold
+    // v2 content while advertising v1, so a v1-only reader would misinterpret it
+    // rather than quarantining it as a format it does not understand.
+    let url = makeTempFileURL()
+    let v1 = #"{"version":1,"apps":{"com.microsoft.VSCode":"com.apple.keylayout.Canadian"}}"#
+    try v1.write(to: url, atomically: true, encoding: .utf8)
+
+    let store = LayoutStore(fileURL: url)
+    #expect(store.didFailToLoad == false)
+    // The existing layout must survive the upgrade untouched.
+    #expect(store.layout(forBundleID: "com.microsoft.VSCode") == "com.apple.keylayout.Canadian")
+
+    // Any write is enough to persist the upgraded version.
+    store.addAppWithNoLayout(bundleID: "com.tinyspeck.slackmacgap")
+
+    let data = try Data(contentsOf: url)
+    let decoded = try JSONDecoder().decode(StoredLayouts.self, from: data)
+    #expect(decoded.version == 2)
+    #expect(decoded.apps["com.microsoft.VSCode"] == "com.apple.keylayout.Canadian")
+    // And the newly added app is present-but-nil, not missing.
+    let slackEntry = decoded.apps["com.tinyspeck.slackmacgap"]
+    #expect(slackEntry != nil)
+    #expect(slackEntry == .some(nil))
+}
+
+@Test func unreadableFileIsQuarantinedAndMarksLoadFailure() throws {
+    let url = makeTempFileURL()
+    try "{\"version\":1,\"apps\":{}}".write(to: url, atomically: true, encoding: .utf8)
+
+    // Remove all permissions so Data(contentsOf:) throws, simulating a file the
+    // OS will not let us read (permissions, ACL, I/O error, etc). This test
+    // assumes it is not running as root, since root ignores POSIX permissions.
+    try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: url.path)
+
+    defer {
+        // Restore permissions so the temp directory can be deleted by whatever
+        // cleans up NSTemporaryDirectory() later.
+        try? FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: url.path)
+    }
+
+    let store = LayoutStore(fileURL: url)
+
+    #expect(store.allEntries().isEmpty)
+    #expect(store.didFailToLoad == true)
+
+    // The original file must still exist somewhere — moved aside, not deleted.
+    let dir = url.deletingLastPathComponent()
+    let names = try FileManager.default.contentsOfDirectory(atPath: dir.path)
+    let originalStillPresent = names.contains("layouts.json")
+    let quarantined = names.filter { name in name.contains("corrupt") }
+    #expect(originalStillPresent == false)
+    #expect(quarantined.count == 1)
+}
+
+@Test func failedLoadThenSetLayoutDoesNotDestroyQuarantinedCopy() throws {
+    let url = makeTempFileURL()
+    try "{\"version\":1,\"apps\":{\"com.apple.Safari\":\"com.apple.keylayout.US\"}}"
+        .write(to: url, atomically: true, encoding: .utf8)
+    try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: url.path)
+
+    let dir = url.deletingLastPathComponent()
+
+    defer {
+        // moveItem preserves permissions, so the quarantined copy is still
+        // chmod 000 under its new name. Restore permissions on whatever ended
+        // up in the directory so the temp directory can be cleaned up.
+        if let names = try? FileManager.default.contentsOfDirectory(atPath: dir.path) {
+            for name in names {
+                try? FileManager.default.setAttributes(
+                    [.posixPermissions: 0o644],
+                    ofItemAtPath: dir.appendingPathComponent(name).path
+                )
+            }
+        }
+    }
+
+    let store = LayoutStore(fileURL: url)
+    #expect(store.didFailToLoad == true)
+
+    // A quarantine copy should exist right after the failed load.
+    let namesAfterLoad = try FileManager.default.contentsOfDirectory(atPath: dir.path)
+    let quarantinedAfterLoad = namesAfterLoad.filter { name in name.contains("corrupt") }
+    #expect(quarantinedAfterLoad.count == 1)
+
+    // Writing a new value must not touch or remove the quarantined file.
+    store.setLayout("com.apple.keylayout.French", forBundleID: "com.tinyspeck.slackmacgap")
+
+    let namesAfterWrite = try FileManager.default.contentsOfDirectory(atPath: dir.path)
+    let quarantinedAfterWrite = namesAfterWrite.filter { name in name.contains("corrupt") }
+    #expect(quarantinedAfterWrite.count == 1)
+    #expect(quarantinedAfterWrite == quarantinedAfterLoad)
+
+    // Restore permissions before reading, to confirm the quarantined file's
+    // contents are exactly what was there originally — proof nothing touched it.
+    let quarantineURL = dir.appendingPathComponent(quarantinedAfterWrite[0])
+    try FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: quarantineURL.path)
+    let quarantinedContents = try String(contentsOf: quarantineURL, encoding: .utf8)
+    #expect(quarantinedContents.contains("com.apple.Safari"))
+}
+
+@Test func whenQuarantineFailsSaveRefusesToOverwriteOriginal() throws {
+    // This test must prove the `quarantineFailed` guard in save() itself is
+    // doing the work — not some unrelated permissions failure. So the
+    // directory here is left fully writable throughout: the only thing that
+    // can stop the write is the guard.
+    let dir = URL(fileURLWithPath: NSTemporaryDirectory())
+        .appendingPathComponent("movamem-test-" + UUID().uuidString)
+    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    let url = dir.appendingPathComponent("layouts.json")
+
+    // Recognizable content with a known byte length, so a later check that
+    // the file was "not overwritten" is a real check and not a coincidence.
+    let originalContents = "this is not valid JSON, but here is some recognizable " +
+        "content: com.apple.Safari, com.tinyspeck.slackmacgap, com.microsoft.VSCode"
+    try originalContents.write(to: url, atomically: true, encoding: .utf8)
+    let originalByteCount = try Data(contentsOf: url).count
+
+    // This content is not valid JSON, so load() will fail to decode it and
+    // call quarantineCorruptFile() — the same path a permissions failure
+    // would take, without needing any permissions games.
+
+    // quarantineCorruptFile() computes its destination as
+    // "layouts.json.corrupt-<Int(Date().timeIntervalSince1970)>". To make its
+    // moveItem call fail, pre-create a directory at that exact path — moving
+    // a file onto an existing directory always fails, whereas a pre-existing
+    // file might be handled differently depending on the filesystem. Because
+    // the timestamp only has one-second granularity, there is a small chance
+    // the clock ticks forward between when we compute "now" here and when
+    // quarantineCorruptFile() computes its own "now". To make the collision
+    // certain regardless of that timing, create obstruction directories for
+    // the current second and the following two seconds.
+    let nowInSeconds = Int(Date().timeIntervalSince1970)
+    for secondOffset in 0...2 {
+        let obstructionURL = dir.appendingPathComponent(
+            "layouts.json.corrupt-\(nowInSeconds + secondOffset)"
+        )
+        try FileManager.default.createDirectory(at: obstructionURL, withIntermediateDirectories: true)
+    }
+
+    let store = LayoutStore(fileURL: url)
+
+    // The malformed file failed to load, and the quarantine move failed
+    // (blocked by our obstruction directory), so the original file must
+    // still be sitting there, byte-for-byte unchanged.
+    #expect(store.didFailToLoad == true)
+    let byteCountAfterLoad = try Data(contentsOf: url).count
+    #expect(byteCountAfterLoad == originalByteCount)
+
+    // This is the critical step: with quarantining having failed, save() must
+    // refuse to write at all, because the directory is writable and nothing
+    // else would stop an ordinary .atomic write from succeeding and
+    // destroying the original file.
+    store.setLayout("com.apple.keylayout.French", forBundleID: "com.tinyspeck.slackmacgap")
+
+    // The original file must be untouched...
+    let byteCountAfterSave = try Data(contentsOf: url).count
+    #expect(byteCountAfterSave == originalByteCount)
+    // ...the menu must be told persistence is broken...
+    #expect(store.isWritable == false)
+    // ...but the session must still work from memory.
+    #expect(store.layout(forBundleID: "com.tinyspeck.slackmacgap") == "com.apple.keylayout.French")
+}
+
+@Test func unwritableDirectorySetsIsWritableFalse() throws {
+    // This is a separate scenario from the quarantine guard above: here the
+    // parent directory itself is read-only, so the .atomic write fails at
+    // the OS level (not because of the quarantineFailed guard). It is kept
+    // as its own test because "a read-only directory degrades gracefully" is
+    // still a real behavior worth covering, just not the quarantine guard.
+    let dir = URL(fileURLWithPath: NSTemporaryDirectory())
+        .appendingPathComponent("movamem-test-" + UUID().uuidString)
+    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    let url = dir.appendingPathComponent("layouts.json")
+    try "{\"version\":1,\"apps\":{\"com.apple.Safari\":\"com.apple.keylayout.US\"}}"
+        .write(to: url, atomically: true, encoding: .utf8)
+
+    // No write permission on the directory means the .atomic write's
+    // temp-file-plus-rename cannot happen there at all.
+    try FileManager.default.setAttributes([.posixPermissions: 0o500], ofItemAtPath: dir.path)
+
+    defer {
+        // Restore permissions so the temp directory can be cleaned up.
+        try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: dir.path)
+        try? FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: url.path)
+    }
+
+    let store = LayoutStore(fileURL: url)
+    store.setLayout("com.apple.keylayout.French", forBundleID: "com.tinyspeck.slackmacgap")
+
+    #expect(store.isWritable == false)
+    // In-memory read still works even though persistence failed.
+    #expect(store.layout(forBundleID: "com.tinyspeck.slackmacgap") == "com.apple.keylayout.French")
+}
+
+@Test func newerSchemaVersionIsQuarantinedRatherThanAdopted() throws {
+    let url = makeTempFileURL()
+    // version 3 with a field this app's StoredLayouts does not know about.
+    // Codable ignores the unknown field silently, so without an explicit
+    // version check this file would decode as if it were a normal current-version
+    // file. Version 3 (not 2) because this task bumped currentSchemaVersion to 2,
+    // so 3 is what is now "newer than this app".
+    try """
+    {"version":3,"apps":{"com.apple.Safari":"com.apple.keylayout.US"},"futureField":"x"}
+    """.write(to: url, atomically: true, encoding: .utf8)
+
+    let store = LayoutStore(fileURL: url)
+
+    #expect(store.allEntries().isEmpty)
+    #expect(store.didFailToLoad == true)
+
+    let dir = url.deletingLastPathComponent()
+    let names = try FileManager.default.contentsOfDirectory(atPath: dir.path)
+    let quarantined = names.filter { name in name.contains("corrupt") }
+    #expect(quarantined.count == 1)
+    #expect(names.contains("layouts.json") == false)
+}
+
+@Test func olderSchemaVersionStillLoadsNormally() throws {
+    let url = makeTempFileURL()
+    try """
+    {"version":1,"apps":{"com.apple.Safari":"com.apple.keylayout.US"}}
+    """.write(to: url, atomically: true, encoding: .utf8)
+
+    let store = LayoutStore(fileURL: url)
+
+    #expect(store.didFailToLoad == false)
+    #expect(store.layout(forBundleID: "com.apple.Safari") == "com.apple.keylayout.US")
+}
+
+@Test func unwritablePathSetsIsWritableFalseButKeepsMemoryValue() {
+    // A directory that cannot be created — the store must degrade, not crash.
+    let badURL = URL(fileURLWithPath: "/System/movamem-cannot-write-here/layouts.json")
+    let store = LayoutStore(fileURL: badURL)
+    store.setLayout("com.apple.keylayout.French", forBundleID: "com.microsoft.VSCode")
+
+    // In-memory read still works, so the session behaves normally.
+    #expect(store.layout(forBundleID: "com.microsoft.VSCode") == "com.apple.keylayout.French")
+    // But the menu needs to know persistence failed.
+    #expect(store.isWritable == false)
+}
+
+@Test func version1FileLoadsWithoutMigrationCode() throws {
+    // A phase-1 file has plain string values and no nulls. It must load as-is:
+    // Swift decodes plain strings into non-nil optionals, so no migration is needed.
+    let url = makeTempFileURL()
+    let v1 = #"{"version":1,"apps":{"com.microsoft.VSCode":"com.apple.keylayout.Canadian"}}"#
+    try v1.write(to: url, atomically: true, encoding: .utf8)
+
+    let store = LayoutStore(fileURL: url)
+    #expect(store.didFailToLoad == false)
+    #expect(store.layout(forBundleID: "com.microsoft.VSCode") == "com.apple.keylayout.Canadian")
+    #expect(store.allEntries().count == 1)
+}
+
+@Test func addAppWithNoLayoutMakesAppManagedButWithoutLayout() {
+    let store = LayoutStore(fileURL: makeTempFileURL())
+    store.addAppWithNoLayout(bundleID: "com.tinyspeck.slackmacgap")
+
+    // Managed, so it appears in the menu...
+    #expect(store.isManaged(bundleID: "com.tinyspeck.slackmacgap") == true)
+    // ...but has no layout, so the coordinator does nothing for it.
+    #expect(store.layout(forBundleID: "com.tinyspeck.slackmacgap") == nil)
+}
+
+@Test func unsetIsDistinguishableFromAbsent() {
+    let store = LayoutStore(fileURL: makeTempFileURL())
+    store.addAppWithNoLayout(bundleID: "com.unset.app")
+
+    // Both return nil from layout(forBundleID:) — that conflation is deliberate,
+    // because the coordinator wants to do nothing in both cases.
+    #expect(store.layout(forBundleID: "com.unset.app") == nil)
+    #expect(store.layout(forBundleID: "com.never.seen") == nil)
+
+    // isManaged is what tells them apart.
+    #expect(store.isManaged(bundleID: "com.unset.app") == true)
+    #expect(store.isManaged(bundleID: "com.never.seen") == false)
+}
+
+@Test func unsetEntryAppearsInAllEntriesWithNilLayout() {
+    // Verifies the behavior the menu depends on: an unset app appears in
+    // allEntries() with a nil layoutID rather than being left out entirely.
+    let store = LayoutStore(fileURL: makeTempFileURL())
+    store.setLayout("com.apple.keylayout.Canadian", forBundleID: "aaa.app")
+    store.addAppWithNoLayout(bundleID: "bbb.app")
+
+    let entries = store.allEntries()
+    #expect(entries.count == 2)
+    #expect(entries[0].bundleID == "aaa.app")
+    #expect(entries[0].layoutID == "com.apple.keylayout.Canadian")
+    #expect(entries[1].bundleID == "bbb.app")
+    #expect(entries[1].layoutID == nil)
+}
+
+@Test func unsetPersistsAsJSONNullAndSurvivesReload() throws {
+    let url = makeTempFileURL()
+    let first = LayoutStore(fileURL: url)
+    first.addAppWithNoLayout(bundleID: "com.unset.app")
+    first.setLayout("com.apple.keylayout.French", forBundleID: "com.set.app")
+
+    // The on-disk form must be an explicit null, not an omitted key. If the key
+    // were omitted, unset would be indistinguishable from absent after a reload.
+    let text = try String(contentsOf: url, encoding: .utf8)
+    #expect(text.contains("null"))
+
+    let second = LayoutStore(fileURL: url)
+    #expect(second.isManaged(bundleID: "com.unset.app") == true)
+    #expect(second.layout(forBundleID: "com.unset.app") == nil)
+    #expect(second.layout(forBundleID: "com.set.app") == "com.apple.keylayout.French")
+}
+
+@Test func writesUseSchemaVersionTwo() throws {
+    let url = makeTempFileURL()
+    let store = LayoutStore(fileURL: url)
+    store.setLayout("com.apple.keylayout.Canadian", forBundleID: "com.a.app")
+
+    let data = try Data(contentsOf: url)
+    let decoded = try JSONDecoder().decode(StoredLayouts.self, from: data)
+    #expect(decoded.version == 2)
+}
+
+@Test func settingALayoutReplacesUnset() {
+    let store = LayoutStore(fileURL: makeTempFileURL())
+    store.addAppWithNoLayout(bundleID: "com.a.app")
+    store.setLayout("com.apple.keylayout.French", forBundleID: "com.a.app")
+
+    #expect(store.layout(forBundleID: "com.a.app") == "com.apple.keylayout.French")
+    #expect(store.allEntries().count == 1)
+}
+
+@Test func addAppWithNoLayoutDoesNotClearAnAlreadyManagedLayout() {
+    // If the user re-adds an app movaMem already learned a layout for, that
+    // layout must survive. The store must not rely on its caller (Task 4's
+    // AppPicker) to prevent this — the guard belongs here.
+    let store = LayoutStore(fileURL: makeTempFileURL())
+    store.setLayout("com.apple.keylayout.Ukrainian-PC", forBundleID: "com.tinyspeck.slackmacgap")
+
+    store.addAppWithNoLayout(bundleID: "com.tinyspeck.slackmacgap")
+
+    #expect(store.layout(forBundleID: "com.tinyspeck.slackmacgap") == "com.apple.keylayout.Ukrainian-PC")
+}
+
+@Test func removeOnAnUnsetEntryRemovesIt() {
+    let store = LayoutStore(fileURL: makeTempFileURL())
+    store.addAppWithNoLayout(bundleID: "com.unset.app")
+
+    store.remove(bundleID: "com.unset.app")
+
+    #expect(store.isManaged(bundleID: "com.unset.app") == false)
+    #expect(store.allEntries().isEmpty)
+}
+
+@Test func addAppWithNoLayoutCalledTwiceIsIdempotent() {
+    let store = LayoutStore(fileURL: makeTempFileURL())
+    store.addAppWithNoLayout(bundleID: "com.unset.app")
+    store.addAppWithNoLayout(bundleID: "com.unset.app")
+
+    #expect(store.isManaged(bundleID: "com.unset.app") == true)
+    #expect(store.layout(forBundleID: "com.unset.app") == nil)
+    #expect(store.allEntries().count == 1)
+}

@@ -1,0 +1,17 @@
+# Swift Package Manager
+.build/
+.swiftpm/
+Package.resolved
+
+# Build output — the assembled app bundle
+movaMem.app/
+
+# Subagent-driven development scratch (ledger, briefs, review packages)
+.superpowers/
+
+# macOS
+.DS_Store
+
+# Xcode (not used, but harmless to guard against)
+*.xcuserstate
+xcuserdata/
