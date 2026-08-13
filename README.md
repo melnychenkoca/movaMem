@@ -192,13 +192,30 @@ state in between.
 `Resources/Info.plist` holds the version. Releasing is bumping it and tagging to match:
 
 ```bash
-# 1. Bump CFBundleShortVersionString in Resources/Info.plist, e.g. to 1.1.0
+# 1. Bump CFBundleShortVersionString and CFBundleVersion in
+#    Resources/Info.plist, e.g. both to 1.1.0
 git commit -am "Version 1.1.0"
 git push
 
-# 2. Tag it
+# 2. Tag that commit
 git tag v1.1.0
 git push origin v1.1.0
+```
+
+The order matters. A tag points at a commit, so the version bump has to be committed
+*first* — tagging before bumping produces a tag whose commit still holds the old version,
+and the workflow rejects it:
+
+```
+Error: Tag v1.1.0 does not match CFBundleShortVersionString 1.0.0.
+```
+
+To recover, delete the tag, bump, and re-tag:
+
+```bash
+git tag -d v1.1.0
+git push origin :refs/tags/v1.1.0
+# bump Resources/Info.plist, commit, push, then tag again
 ```
 
 [`.github/workflows/release.yml`](.github/workflows/release.yml) then runs the tests, builds the
