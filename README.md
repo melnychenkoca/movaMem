@@ -56,6 +56,7 @@ Requires macOS 14 or later.
 brew tap melnychenkoca/movamem
 brew trust --cask melnychenkoca/movamem/movamem
 brew install --cask movamem
+
 xattr -dr com.apple.quarantine /Applications/movaMem.app
 open /Applications/movaMem.app
 ```
@@ -94,6 +95,39 @@ is a menu bar app only.
 
 To start using it, go to an app, switch to the layout you want there, and repeat for a couple of
 apps. Then switch between them.
+
+## Upgrade
+
+If you installed with Homebrew:
+
+```bash
+brew update
+brew upgrade --cask movamem
+
+xattr -dr com.apple.quarantine /Applications/movaMem.app
+open /Applications/movaMem.app
+```
+
+`brew update` refreshes the tap first — without it Homebrew keeps offering the version it already
+knows about and reports nothing to upgrade. The freshly downloaded build is quarantined like any
+other, so the `xattr` step is needed again for the same reason as at install time.
+
+Quit movaMem from its menu before upgrading if Homebrew complains that the app is running. After
+relaunching, check the version row at the bottom of the menu to confirm the new build is the one
+running — a stale tap or a failed replace is otherwise invisible.
+
+Your remembered layouts live outside the app bundle and are untouched by an upgrade.
+
+If you installed from source:
+
+```bash
+cd movaMem
+git pull
+make install
+open /Applications/movaMem.app
+```
+
+Quit the running copy from its menu first, so `make install` replaces the bundle cleanly.
 
 ## Uninstall
 
