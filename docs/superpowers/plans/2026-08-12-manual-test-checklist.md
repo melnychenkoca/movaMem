@@ -91,8 +91,8 @@ make install && open /Applications/movaMem.app
 
 - [ ] **Step 1: No Dock icon**
 
-  A keyboard glyph appears at the right of the menu bar. **No Dock icon appears.** If one
-  does, `LSUIElement` is not being read.
+  An `mM` glyph in a rounded border appears at the right of the menu bar. **No Dock icon
+  appears.** If one does, `LSUIElement` is not being read.
 
 - [ ] **Step 2: Empty state**
 

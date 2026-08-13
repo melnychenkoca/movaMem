@@ -43,15 +43,17 @@ final class MenuController: NSObject {
     }
 
     private func showIcon() {
-        let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
+        // variableLength, not squareLength: "mM" is wider than it is tall, and a
+        // square status item would clip the second letter.
+        let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
 
         // A static glyph, deliberately: a live layout code would be confused with
         // the system's own input menu.
         if let button = item.button {
-            button.image = NSImage(
-                systemSymbolName: "keyboard",
-                accessibilityDescription: "movaMem"
-            )
+            button.image = StatusGlyph.image()
+            // The image carries no text of its own as far as VoiceOver is
+            // concerned, so the description is what names the app aloud.
+            button.image?.accessibilityDescription = "movaMem"
         }
 
         let menu = NSMenu()

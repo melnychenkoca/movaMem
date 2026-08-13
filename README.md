@@ -84,7 +84,7 @@ make install
 open /Applications/movaMem.app
 ```
 
-A keyboard glyph appears at the right of the menu bar. There is no Dock icon and no window — it
+An `mM` glyph appears at the right of the menu bar. There is no Dock icon and no window — it
 is a menu bar app only.
 
 To start using it, go to an app, switch to the layout you want there, and repeat for a couple of
@@ -113,7 +113,7 @@ rm -rf ~/Library/Application\ Support/movaMem
 |---|---|
 | `make` | Build and assemble `movaMem.app` in the project directory |
 | `make install` | Build, assemble, and copy to `/Applications` |
-| `make test` | Run the test suite (64 tests) |
+| `make test` | Run the test suite (71 tests) |
 | `make build` | Compile only, no bundle |
 | `make clean` | Remove build artifacts and the bundle |
 | `make sign-setup` | Print one-time steps for a stable code signature (optional) |
@@ -177,6 +177,7 @@ Carbon TIS ──"layout → Ukrainian"──┘           │
 | `MenuController` | The menu bar item and its menus |
 | `AppPicker` | Decides whether a chosen app can be managed |
 | `AppVersion` | Formats the version row from the bundle's own Info.plist |
+| `StatusGlyph` | Draws the "mM" menu bar glyph as a template image |
 | `Tools/make-icon.swift` | Draws the app icon; not part of the app target |
 | `main.swift` | Wires the pieces together; no logic of its own |
 
@@ -270,4 +271,4 @@ Code style is deliberately plain rather than idiomatic: explicit loops over chai
 `map`/`filter`, named intermediate values, no force-unwraps, and comments that explain *why*. The
 project is reviewed by someone who does not write Swift, so readability beats brevity.
 
-Around 1,350 lines of Swift across 10 files, no third-party dependencies.
+Around 1,475 lines of Swift across 11 files, no third-party dependencies.
