@@ -53,6 +53,17 @@ final class SystemAppCache: @unchecked Sendable {
 }
 
 let store = LayoutStore(fileURL: storeFileURL())
+
+/// Shared by the launch prune below and the menu's row filtering, so one Launch
+/// Services answer per bundle ID serves both.
+let installedApps = InstalledAppDetector()
+
+// Drop forgotten entries for apps that are no longer on this Mac. Managed apps
+// are deliberately NOT pruned here — see pruneForgotten's own comment for why
+// the two lists are treated differently. Uninstalled managed apps are hidden by
+// the menu instead, keeping their layouts recoverable.
+store.pruneForgotten { installedApps.isInstalled(bundleID: $0) }
+
 let inputSource = InputSourceService()
 let appMonitor = AppMonitor()
 
@@ -78,7 +89,8 @@ let menuController = MenuController(
     store: store,
     inputSource: inputSource,
     coordinator: coordinator,
-    appMonitor: appMonitor
+    appMonitor: appMonitor,
+    isInstalled: { installedApps.isInstalled(bundleID: $0) }
 )
 menuController.install()
 

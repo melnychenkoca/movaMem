@@ -758,3 +758,81 @@ private func makeTempFileURL() -> URL {
     #expect(store.layout(forBundleID: "com.unset.app") == nil)
     #expect(store.allEntries().count == 1)
 }
+
+// MARK: - Pruning uninstalled apps
+
+@Test func pruneForgottenDropsAppsThatAreNoLongerInstalled() {
+    // The point of the feature: an app uninstalled from the Mac should stop
+    // showing up in Forgotten Apps.
+    let store = LayoutStore(fileURL: makeTempFileURL())
+    store.remove(bundleID: "com.gone.app")
+    store.remove(bundleID: "com.still.here")
+
+    store.pruneForgotten { bundleID in bundleID == "com.still.here" }
+
+    #expect(store.isForgotten(bundleID: "com.gone.app") == false)
+    #expect(store.isForgotten(bundleID: "com.still.here") == true)
+    #expect(store.forgottenBundleIDs() == ["com.still.here"])
+}
+
+@Test func pruneForgottenLeavesManagedAppsAlone() {
+    // Managed entries hold a deliberately chosen layout. Pruning must never
+    // touch them, however the installed check answers — an uninstalled managed
+    // app is hidden by the menu, not deleted from the store.
+    let store = LayoutStore(fileURL: makeTempFileURL())
+    store.setLayout("com.apple.keylayout.French", forBundleID: "com.gone.app")
+
+    store.pruneForgotten { _ in false }
+
+    #expect(store.layout(forBundleID: "com.gone.app") == "com.apple.keylayout.French")
+    #expect(store.allEntries().count == 1)
+}
+
+@Test func pruneForgottenSurvivesReload() {
+    let url = makeTempFileURL()
+    let first = LayoutStore(fileURL: url)
+    first.remove(bundleID: "com.gone.app")
+    first.remove(bundleID: "com.still.here")
+
+    first.pruneForgotten { bundleID in bundleID == "com.still.here" }
+
+    let second = LayoutStore(fileURL: url)
+    #expect(second.forgottenBundleIDs() == ["com.still.here"])
+}
+
+@Test func pruneForgottenWithNothingToDropDoesNotRewriteTheFile() throws {
+    // Every launch calls this. When nothing changed it must not touch the file,
+    // so an unchanged store keeps its modification date and a read-only disk
+    // does not get flagged unwritable for no reason.
+    let url = makeTempFileURL()
+    let store = LayoutStore(fileURL: url)
+    store.remove(bundleID: "com.still.here")
+
+    let before = try FileManager.default.attributesOfItem(atPath: url.path)[.modificationDate] as? Date
+    store.pruneForgotten { _ in true }
+    let after = try FileManager.default.attributesOfItem(atPath: url.path)[.modificationDate] as? Date
+
+    #expect(before == after)
+}
+
+@Test func pruneForgottenAsksAboutEachBundleIDOnlyOnce() {
+    // The predicate is a Launch Services call behind a cache. Prune must not
+    // turn a large forgotten list into repeated lookups for the same ID.
+    let store = LayoutStore(fileURL: makeTempFileURL())
+    store.remove(bundleID: "com.a.app")
+    store.remove(bundleID: "com.b.app")
+
+    var asked: [String] = []
+    store.pruneForgotten { bundleID in
+        asked.append(bundleID)
+        return true
+    }
+
+    #expect(asked.sorted() == ["com.a.app", "com.b.app"])
+}
+
+@Test func pruneForgottenOnAnEmptyListIsHarmless() {
+    let store = LayoutStore(fileURL: makeTempFileURL())
+    store.pruneForgotten { _ in false }
+    #expect(store.forgottenBundleIDs().isEmpty)
+}

@@ -272,6 +272,48 @@ final class LayoutStore {
         save()
     }
 
+    /// Drops forgotten entries whose app is no longer installed on this Mac.
+    ///
+    /// Called once at launch. An app the user uninstalled should stop appearing
+    /// in Forgotten Apps — the entry names software that is simply gone, and
+    /// leaving it there makes the list grow forever with rows the user cannot
+    /// act on meaningfully.
+    ///
+    /// Only `forgotten` is touched; `apps` is deliberately left alone. A managed
+    /// entry holds a layout the user chose on purpose, and `isInstalled` is
+    /// backed by Launch Services, which can answer "no" for an app that is
+    /// actually present — an unmounted external volume, or a database that has
+    /// not finished warming up after login. Deleting a forgotten entry on a
+    /// wrong answer costs nothing, because a forgotten entry carries no user
+    /// data: it only suppresses automatic learning, and if the app comes back,
+    /// activating it simply learns it again. Deleting a managed entry on the
+    /// same wrong answer would destroy a deliberate choice with no way to get it
+    /// back. So the menu hides uninstalled managed apps instead, and their
+    /// layouts survive a reinstall.
+    ///
+    /// `isInstalled` is injected rather than called directly here, both so this
+    /// stays testable without touching the filesystem and so the store keeps its
+    /// existing freedom from any AppKit dependency.
+    func pruneForgotten(isInstalled: (String) -> Bool) {
+        // Each ID is asked about exactly once: the predicate is a Launch
+        // Services lookup at the call site, not a free read.
+        let missing = forgotten.filter { bundleID in
+            isInstalled(bundleID) == false
+        }
+
+        // No write when nothing changed. This runs on every launch, so an
+        // unwarranted save would rewrite the file each time — churning its
+        // modification date, and needlessly flipping isWritable to false on a
+        // read-only disk when there was nothing to record.
+        if missing.isEmpty {
+            return
+        }
+
+        forgotten.subtract(missing)
+        log.debug("Pruned \(missing.count) forgotten apps that are no longer installed")
+        save()
+    }
+
     // MARK: - Disk
 
     private func load() {

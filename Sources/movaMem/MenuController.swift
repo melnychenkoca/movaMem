@@ -21,18 +21,25 @@ final class MenuController: NSObject {
     private let coordinator: SwitchCoordinator
     private let appMonitor: AppMonitoring
 
+    /// Whether an app is still installed. Injected so this class does not own a
+    /// Launch Services cache of its own, and so the filtering it drives can be
+    /// exercised without touching the real filesystem.
+    private let isInstalled: (String) -> Bool
+
     private var statusItem: NSStatusItem?
 
     init(
         store: LayoutStore,
         inputSource: InputSourceProviding,
         coordinator: SwitchCoordinator,
-        appMonitor: AppMonitoring
+        appMonitor: AppMonitoring,
+        isInstalled: @escaping (String) -> Bool
     ) {
         self.store = store
         self.inputSource = inputSource
         self.coordinator = coordinator
         self.appMonitor = appMonitor
+        self.isInstalled = isInstalled
         super.init()
     }
 
@@ -533,10 +540,31 @@ extension MenuController: NSMenuDelegate {
     }
 
     private func addAppEntries(to menu: NSMenu) {
-        let entries = store.allEntries()
+        // Apps the user has uninstalled are hidden rather than deleted. Their
+        // stored layout stays in layouts.json, so reinstalling the app — or
+        // remounting the volume it lives on — brings the row back with the
+        // layout intact. Filtering here rather than in the store is what makes
+        // that possible: the store keeps the truth, the menu shows what is
+        // actionable right now.
+        //
+        // Note this is recomputed on every menu open, so an app uninstalled
+        // while movaMem runs disappears without a relaunch — as far as
+        // InstalledAppDetector's per-process cache allows.
+        let entries = store.allEntries().filter { entry in
+            isInstalled(entry.bundleID)
+        }
 
         if entries.isEmpty {
-            let empty = NSMenuItem(title: "No apps remembered yet", action: nil, keyEquivalent: "")
+            // Two different empty states, and saying "yet" for the second one
+            // would be a lie: the apps WERE remembered, they are just not
+            // installed right now, and their layouts are still on disk waiting
+            // for a reinstall. Telling the user nothing was ever recorded would
+            // invite them to start over from scratch for no reason.
+            let hasHiddenEntries = store.allEntries().isEmpty == false
+            let title = hasHiddenEntries
+                ? "No remembered apps installed"
+                : "No apps remembered yet"
+            let empty = NSMenuItem(title: title, action: nil, keyEquivalent: "")
             empty.isEnabled = false
             menu.addItem(empty)
             return
