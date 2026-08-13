@@ -9,7 +9,8 @@ chose in each application and restores it when you come back.
 Type English in VS Code, Ukrainian in Slack, French in Telegram. Switch between them and the
 layout follows.
 
-![movaMem's menu bar item, showing remembered apps and a layout submenu](docs/superpowers/pics/bar-menu.png)
+<img src="docs/superpowers/pics/bar-menu-v2.png" alt="movaMem's menu bar item, showing remembered apps and a layout submenu" width="600">
+<img src="docs/superpowers/pics/bar-menu-v2-forgotten-apps.png" alt="movaMem's menu bar item, showing forgotten apps and a layout submenu" width="600">
 
 ## What it does
 
