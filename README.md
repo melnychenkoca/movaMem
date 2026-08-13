@@ -40,8 +40,29 @@ permission dialogs from polluting your saved layouts.
 
 ## Install
 
-Requires macOS 14 or later and Swift 6. Full Xcode is **not** needed — the Command Line Tools are
-enough.
+Requires macOS 14 or later.
+
+### With Homebrew
+
+```bash
+brew tap melnychenkoca/movamem
+brew install --cask --no-quarantine movamem
+open /Applications/movaMem.app
+```
+
+`--no-quarantine` is required. movaMem is built without an Apple Developer ID, so releases are
+ad-hoc signed rather than notarized, and macOS refuses to launch a quarantined app with no
+notarization ticket — reporting it as *"damaged and can't be opened"*. The app is not damaged;
+that is just the message macOS uses.
+
+If you would rather leave quarantine in place, install without the flag and approve the app once:
+try to open it, let macOS block it, then go to System Settings → Privacy & Security and click
+**Open Anyway**. On macOS 15 and later this is the only manual route — Apple removed the old
+Control-click → Open bypass.
+
+### From source
+
+Needs Swift 6. Full Xcode is **not** required — the Command Line Tools are enough.
 
 ```bash
 git clone git@github.com:melnychenkoca/movaMem.git
@@ -57,6 +78,15 @@ To start using it, go to an app, switch to the layout you want there, and repeat
 apps. Then switch between them.
 
 ## Uninstall
+
+If you installed with Homebrew:
+
+```bash
+brew uninstall --cask movamem          # keeps your remembered layouts
+brew uninstall --zap --cask movamem    # removes them too
+```
+
+If you installed from source:
 
 ```bash
 # Quit from the menu first, then:
@@ -74,6 +104,11 @@ rm -rf ~/Library/Application\ Support/movaMem
 | `make build` | Compile only, no bundle |
 | `make clean` | Remove build artifacts and the bundle |
 | `make sign-setup` | Print one-time steps for a stable code signature (optional) |
+| `make dist` | Build the universal release zip and print its SHA256 |
+
+`make dist` is what CI runs on a version tag. It cross-compiles both architectures and joins them
+with `lipo`, because `swift build --arch arm64 --arch x86_64` routes through Xcode's build system
+and fails under Command Line Tools alone.
 
 The app is ad-hoc signed by default, which is fine for personal use. `make sign-setup` explains
 how to create a self-signed certificate if you want a stable identity across rebuilds.
@@ -141,6 +176,23 @@ breaks on both, intermittently. Storing *which* layout we selected is immune to 
 **Availability comes from the OS, every time the menu opens.** A layout you uninstall shows as
 `(unavailable)` and dimmed, and returns to normal when you reinstall it — with no stale cached
 state in between.
+
+## Releasing
+
+Pushing a version tag builds and publishes a release:
+
+```bash
+git tag v1.0.0
+git push origin v1.0.0
+```
+
+[`.github/workflows/release.yml`](.github/workflows/release.yml) runs the tests, builds the
+universal bundle, verifies the asset really is universal and correctly signed, attaches
+`movaMem.zip` to the GitHub release, and prints its SHA256.
+
+Then update the cask in the
+[tap repository](https://github.com/melnychenkoca/homebrew-movamem) with the new `version` and
+that `sha256`.
 
 ## Development
 
