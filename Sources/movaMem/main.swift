@@ -23,7 +23,10 @@ let appMonitor = AppMonitor()
 let coordinator = SwitchCoordinator(
     inputSource: inputSource,
     appMonitor: appMonitor,
-    store: store
+    store: store,
+    // Read on every activation rather than captured once, so toggling the menu
+    // item takes effect on the next app switch.
+    shouldLearnOnActivation: { Preferences.learnNewAppsAutomatically }
 )
 coordinator.start()
 appMonitor.start()

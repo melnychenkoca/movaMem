@@ -98,6 +98,15 @@ final class MenuController: NSObject {
         }
     }
 
+    // No need to notify the coordinator: it reads this preference through a
+    // closure on every activation, so the new value applies to the next app
+    // switch on its own. There is deliberately nothing to keep in sync here.
+    @objc private func toggleLearnNewApps() {
+        let newValue = Preferences.learnNewAppsAutomatically == false
+        Preferences.learnNewAppsAutomatically = newValue
+        log.debug("Learn new apps automatically: \(newValue, privacy: .public)")
+    }
+
     @objc private func quit() {
         NSApplication.shared.terminate(nil)
     }
@@ -170,6 +179,21 @@ extension MenuController: NSMenuDelegate {
         menu.removeAllItems()
         addStorageWarning(to: menu)
         addAppEntries(to: menu)
+
+        // Sits directly above Add App... because it is the automatic counterpart
+        // to that manual action: both are how an app joins the list.
+        let learnItem = NSMenuItem(
+            title: "Learn new apps automatically",
+            action: #selector(toggleLearnNewApps),
+            keyEquivalent: ""
+        )
+        learnItem.target = self
+        if Preferences.learnNewAppsAutomatically {
+            learnItem.state = .on
+        } else {
+            learnItem.state = .off
+        }
+        menu.addItem(learnItem)
 
         // Grouped with the app list rather than the settings below, because it is
         // a list operation. The trailing ellipsis is the macOS convention for an

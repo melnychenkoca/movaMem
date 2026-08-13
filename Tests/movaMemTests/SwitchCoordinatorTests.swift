@@ -283,6 +283,174 @@ private let french = "com.apple.keylayout.French"
     #expect(store.layout(forBundleID: "com.unset.app") == french)
 }
 
+// MARK: - Learning on activation
+// The "Learn new apps automatically" toggle. Default off, so the two
+// "...DoesNothing" tests above still describe shipped default behavior; these
+// cover the toggle switched on.
+
+@Test func learningOnRecordsCurrentLayoutForUnknownApp() {
+    // The case this feature exists for: the user opens an app movaMem has never
+    // seen, the layout already active is the one they want there, and there is
+    // no hand-switch for handleLayoutChanged to learn from. With learning on,
+    // activation itself records it.
+    let input = FakeInputSource(current: ukrainian, installed: [canadian, ukrainian])
+    let monitor = FakeAppMonitor()
+    let store = makeTempStore()
+
+    let coordinator = SwitchCoordinator(
+        inputSource: input,
+        appMonitor: monitor,
+        store: store,
+        shouldLearnOnActivation: { true }
+    )
+    coordinator.start()
+
+    monitor.simulateActivation(of: "com.tinyspeck.slackmacgap")
+
+    #expect(store.layout(forBundleID: "com.tinyspeck.slackmacgap") == ukrainian)
+    // Recording must not switch anything: the layout is already active, and a
+    // redundant select fires no notification (see the layoutWeSelected comment).
+    #expect(input.selectCalls.isEmpty)
+}
+
+@Test func learningOnFillsInAnUnsetApp() {
+    // An Add App... entry holds .some(nil) — managed but unset. store.layout
+    // returns nil for it exactly as it does for a never-seen app, so learning
+    // covers it too, which is the chosen "Both" scope.
+    let input = FakeInputSource(current: french, installed: [canadian, french])
+    let monitor = FakeAppMonitor()
+    let store = makeTempStore()
+    store.addAppWithNoLayout(bundleID: "com.unset.app")
+
+    let coordinator = SwitchCoordinator(
+        inputSource: input,
+        appMonitor: monitor,
+        store: store,
+        shouldLearnOnActivation: { true }
+    )
+    coordinator.start()
+
+    monitor.simulateActivation(of: "com.unset.app")
+
+    #expect(store.layout(forBundleID: "com.unset.app") == french)
+    #expect(store.allEntries().count == 1)   // filled in, not duplicated
+}
+
+@Test func learningOnWithUnknownCurrentLayoutRecordsNothing() {
+    // currentLayoutID is documented as nil-able. Recording a null over an unset
+    // entry would rewrite the file to no effect, and inventing an entry for a
+    // never-seen app with no layout to put in it is worse than doing nothing.
+    let input = FakeInputSource(current: nil, installed: [canadian, french])
+    let monitor = FakeAppMonitor()
+    let store = makeTempStore()
+
+    let coordinator = SwitchCoordinator(
+        inputSource: input,
+        appMonitor: monitor,
+        store: store,
+        shouldLearnOnActivation: { true }
+    )
+    coordinator.start()
+
+    monitor.simulateActivation(of: "com.unknown.app")
+    #expect(store.allEntries().isEmpty)
+}
+
+@Test func learningDoesNotArmSuppressionState() {
+    // Learning performs no select(), so it must leave layoutWeSelected alone.
+    // Arming it here would make the coordinator treat the user's next genuine
+    // switch to that same layout as its own change and ignore it — the exact
+    // class of bug cancelNotedLayout() exists to prevent.
+    let input = FakeInputSource(current: ukrainian, installed: [canadian, ukrainian])
+    let monitor = FakeAppMonitor()
+    let store = makeTempStore()
+
+    let coordinator = SwitchCoordinator(
+        inputSource: input,
+        appMonitor: monitor,
+        store: store,
+        shouldLearnOnActivation: { true }
+    )
+    coordinator.start()
+
+    // Learning records ukrainian for this app without selecting it.
+    monitor.simulateActivation(of: "com.tinyspeck.slackmacgap")
+    #expect(store.layout(forBundleID: "com.tinyspeck.slackmacgap") == ukrainian)
+
+    // The user switches away to canadian and then deliberately back to
+    // ukrainian. Both are genuine changes and both must be recorded.
+    input.simulateUserSwitch(to: canadian)
+    #expect(store.layout(forBundleID: "com.tinyspeck.slackmacgap") == canadian)
+
+    input.simulateUserSwitch(to: ukrainian)
+    #expect(store.layout(forBundleID: "com.tinyspeck.slackmacgap") == ukrainian)
+}
+
+@Test func learningDoesNotOverwriteAnAppThatAlreadyHasALayout() {
+    // A stored layout is a deliberate user choice and outranks whatever happens
+    // to be active now. Activation must restore it, never learn over it.
+    let input = FakeInputSource(current: french, installed: [canadian, ukrainian, french])
+    let monitor = FakeAppMonitor()
+    let store = makeTempStore()
+    store.setLayout(ukrainian, forBundleID: "com.tinyspeck.slackmacgap")
+
+    let coordinator = SwitchCoordinator(
+        inputSource: input,
+        appMonitor: monitor,
+        store: store,
+        shouldLearnOnActivation: { true }
+    )
+    coordinator.start()
+
+    monitor.simulateActivation(of: "com.tinyspeck.slackmacgap")
+
+    #expect(store.layout(forBundleID: "com.tinyspeck.slackmacgap") == ukrainian)
+    #expect(input.selectCalls == [ukrainian])
+}
+
+@Test func learningIsReadLiveSoTogglingOffTakesEffectImmediately() {
+    // The toggle arrives as a closure read on each activation, not a value
+    // captured at construction, so flipping it in the menu applies to the very
+    // next app activation without rebuilding the coordinator.
+    var learningIsOn = false
+    let input = FakeInputSource(current: canadian, installed: [canadian])
+    let monitor = FakeAppMonitor()
+    let store = makeTempStore()
+
+    let coordinator = SwitchCoordinator(
+        inputSource: input,
+        appMonitor: monitor,
+        store: store,
+        shouldLearnOnActivation: { learningIsOn }
+    )
+    coordinator.start()
+
+    monitor.simulateActivation(of: "com.a.app")
+    #expect(store.allEntries().isEmpty)   // off: nothing learned
+
+    learningIsOn = true
+    monitor.simulateActivation(of: "com.b.app")
+    #expect(store.layout(forBundleID: "com.b.app") == canadian)
+
+    learningIsOn = false
+    monitor.simulateActivation(of: "com.c.app")
+    #expect(store.isManaged(bundleID: "com.c.app") == false)
+}
+
+@Test func learningDefaultsOffWhenNotConfigured() {
+    // The existing three-argument init must keep meaning "do not learn", so
+    // every current call site and test keeps its documented behavior.
+    let input = FakeInputSource(current: canadian, installed: [canadian])
+    let monitor = FakeAppMonitor()
+    let store = makeTempStore()
+
+    let coordinator = SwitchCoordinator(inputSource: input, appMonitor: monitor, store: store)
+    coordinator.start()
+
+    monitor.simulateActivation(of: "com.unknown.app")
+    #expect(store.allEntries().isEmpty)
+}
+
 // MARK: - Menu-initiated selects (chooseLayout's caller of select())
 
 @Test func menuSelectDoesNotOverwriteAnotherAppWhenFrontmostChangesFirst() {
@@ -408,4 +576,49 @@ private let french = "com.apple.keylayout.French"
     input.simulateUserSwitch(to: french)
 
     #expect(store.layout(forBundleID: "com.b.app") == french)
+}
+
+// MARK: - Learning end to end, against a real store file
+
+@Test func learnedLayoutSurvivesAReloadFromDisk() {
+    // The other learning tests assert against the in-memory store. This one
+    // proves the learned value actually reaches disk in a form a fresh launch
+    // reads back, which is the whole point of remembering it.
+    let dir = URL(fileURLWithPath: NSTemporaryDirectory())
+        .appendingPathComponent("movamem-learn-" + UUID().uuidString)
+    try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    let fileURL = dir.appendingPathComponent("layouts.json")
+
+    let input = FakeInputSource(current: ukrainian, installed: [canadian, ukrainian])
+    let monitor = FakeAppMonitor()
+
+    do {
+        let store = LayoutStore(fileURL: fileURL)
+        let coordinator = SwitchCoordinator(
+            inputSource: input,
+            appMonitor: monitor,
+            store: store,
+            shouldLearnOnActivation: { true }
+        )
+        coordinator.start()
+        monitor.simulateActivation(of: "com.tinyspeck.slackmacgap")
+    }
+
+    // A brand new store reading the same file, as the next launch would.
+    let reloaded = LayoutStore(fileURL: fileURL)
+    #expect(reloaded.layout(forBundleID: "com.tinyspeck.slackmacgap") == ukrainian)
+
+    // And on that next launch the remembered layout is restored normally, with
+    // learning off — proving a learned entry is indistinguishable from a
+    // hand-taught one.
+    let freshInput = FakeInputSource(current: canadian, installed: [canadian, ukrainian])
+    let freshMonitor = FakeAppMonitor()
+    let freshCoordinator = SwitchCoordinator(
+        inputSource: freshInput,
+        appMonitor: freshMonitor,
+        store: reloaded
+    )
+    freshCoordinator.start()
+    freshMonitor.simulateActivation(of: "com.tinyspeck.slackmacgap")
+    #expect(freshInput.selectCalls == [ukrainian])
 }

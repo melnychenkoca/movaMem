@@ -35,10 +35,30 @@ final class SwitchCoordinator {
     /// reinstalled, which this sticky set would not.
     private(set) var unavailableLayoutIDs: Set<String> = []
 
-    init(inputSource: InputSourceProviding, appMonitor: AppMonitoring, store: LayoutStore) {
+    /// Whether to record the active layout for an app that has none, at the
+    /// moment that app is activated. Backs the "Learn new apps automatically"
+    /// menu toggle.
+    ///
+    /// This is a closure rather than a stored Bool so it is read fresh on every
+    /// activation: the user can flip the menu item at any time and the next
+    /// activation must honor it, with nothing to keep in sync. It is also what
+    /// keeps UserDefaults out of this class — the preference is read in the
+    /// closure the app wires up in main.swift, so tests pass a plain Bool and
+    /// never touch global defaults state.
+    private let shouldLearnOnActivation: () -> Bool
+
+    init(
+        inputSource: InputSourceProviding,
+        appMonitor: AppMonitoring,
+        store: LayoutStore,
+        // Defaults to off, which is both the shipped default and what every
+        // pre-existing call site and test expects.
+        shouldLearnOnActivation: @escaping () -> Bool = { false }
+    ) {
         self.inputSource = inputSource
         self.appMonitor = appMonitor
         self.store = store
+        self.shouldLearnOnActivation = shouldLearnOnActivation
     }
 
     /// Installs the event callbacks. Nothing happens until this is called.
@@ -110,9 +130,13 @@ final class SwitchCoordinator {
 
     private func handleAppActivated(bundleID: String) {
         guard let wantedLayout = store.layout(forBundleID: bundleID) else {
-            // First time seeing this app. Do nothing: entries should only ever
-            // reflect a deliberate choice by the user.
-            log.debug("No remembered layout for \(bundleID, privacy: .public)")
+            // Nothing to restore. Two situations reach here and neither needs
+            // telling apart: the app has never been seen, or it is managed via
+            // Add App... but still unset.
+            //
+            // Without learning enabled this does nothing at all, because an entry
+            // should only ever reflect a deliberate choice by the user.
+            learnLayoutIfEnabled(forBundleID: bundleID)
             return
         }
 
@@ -139,6 +163,35 @@ final class SwitchCoordinator {
             unavailableLayoutIDs.insert(wantedLayout)
             layoutWeSelected = nil
         }
+    }
+
+    /// Records the layout that is already active as this app's preference.
+    ///
+    /// Called only from the "nothing to restore" path above, so it can never
+    /// overwrite a layout the user deliberately chose.
+    ///
+    /// Deliberately performs no select(): the layout being recorded is the one
+    /// already active, so there is nothing to switch to. That is also why this
+    /// must NOT touch `layoutWeSelected` — no notification is coming, so an
+    /// armed value would never be cleared and would swallow the user's next
+    /// genuine switch to this same layout, which is the failure
+    /// `cancelNotedLayout()` exists to undo elsewhere.
+    private func learnLayoutIfEnabled(forBundleID bundleID: String) {
+        if shouldLearnOnActivation() == false {
+            log.debug("No remembered layout for \(bundleID, privacy: .public)")
+            return
+        }
+
+        guard let activeLayout = inputSource.currentLayoutID else {
+            // currentLayoutID is documented as nil-able. There is no layout to
+            // record, and creating an entry with nothing in it would only add a
+            // "(not set)" row the user never asked for.
+            log.error("Cannot learn layout for \(bundleID, privacy: .public): current layout is unknown")
+            return
+        }
+
+        log.debug("Learning \(activeLayout, privacy: .public) for \(bundleID, privacy: .public)")
+        store.setLayout(activeLayout, forBundleID: bundleID)
     }
 
     // MARK: - Layout changed

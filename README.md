@@ -21,6 +21,11 @@ layout follows.
 - **Forget an app** to stop managing it.
 - **Add an app you have never opened** via `Add App…`, including one that is not running. It
   starts as `(not set)` and does nothing until you pick a layout.
+- **Learn new apps automatically**, off by default. With it on, the first time you switch to an
+  app movaMem does not know, it saves whatever layout is active right then — useful when that
+  layout is already the one you want there, since watching alone would never see a switch to
+  learn from. It fills in `(not set)` entries too. Leave it off and the list stays limited to
+  apps you chose deliberately.
 - **Hide the menu bar icon** if you want it out of the way. The app keeps working; relaunching
   brings the icon back.
 - **Launch at login**, off by default.
@@ -113,7 +118,7 @@ rm -rf ~/Library/Application\ Support/movaMem
 |---|---|
 | `make` | Build and assemble `movaMem.app` in the project directory |
 | `make install` | Build, assemble, and copy to `/Applications` |
-| `make test` | Run the test suite (71 tests) |
+| `make test` | Run the test suite (79 tests) |
 | `make build` | Compile only, no bundle |
 | `make clean` | Remove build artifacts and the bundle |
 | `make sign-setup` | Print one-time steps for a stable code signature (optional) |
@@ -177,6 +182,7 @@ Carbon TIS ──"layout → Ukrainian"──┘           │
 | `MenuController` | The menu bar item and its menus |
 | `AppPicker` | Decides whether a chosen app can be managed |
 | `AppVersion` | Formats the version row from the bundle's own Info.plist |
+| `Preferences` | The settings that persist across launches |
 | `StatusGlyph` | Draws the "mM" menu bar glyph as a template image |
 | `Tools/make-icon.swift` | Draws the app icon; not part of the app target |
 | `main.swift` | Wires the pieces together; no logic of its own |
@@ -188,7 +194,8 @@ around.
 
 ### Design notes
 
-Two decisions worth knowing about, both driven by measured behavior rather than assumption:
+Three decisions worth knowing about, the first two driven by measured behavior rather than
+assumption:
 
 **Suppression stores a layout ID, not a flag.** movaMem must ignore the layout-change notification
 caused by its own switching. The obvious approach is a boolean, and it is wrong: selecting an
@@ -199,67 +206,12 @@ breaks on both, intermittently. Storing *which* layout we selected is immune to 
 `(unavailable)` and dimmed, and returns to normal when you reinstall it — with no stale cached
 state in between.
 
-## Releasing
-
-`Resources/Info.plist` holds the version. Releasing is bumping it and tagging to match:
-
-```bash
-# 1. Bump CFBundleShortVersionString and CFBundleVersion in
-#    Resources/Info.plist, e.g. both to 1.1.0
-git commit -am "Version 1.1.0"
-git push
-
-# 2. Tag that commit
-git tag v1.1.0
-git push origin v1.1.0
-```
-
-The order matters. A tag points at a commit, so the version bump has to be committed
-*first* — tagging before bumping produces a tag whose commit still holds the old version,
-and the workflow rejects it:
-
-```
-Error: Tag v1.1.0 does not match CFBundleShortVersionString 1.0.0.
-```
-
-To recover, delete the tag, bump, and re-tag:
-
-```bash
-git tag -d v1.1.0
-git push origin :refs/tags/v1.1.0
-# bump Resources/Info.plist, commit, push, then tag again
-```
-
-[`.github/workflows/release.yml`](.github/workflows/release.yml) then runs the tests, builds the
-universal bundle, verifies the asset really is universal and correctly signed, publishes
-`movaMem.zip` to the GitHub release, and updates the Homebrew cask.
-
-The tag and `CFBundleShortVersionString` **must** match, and the workflow fails if they do not.
-Without that check a tag can ship an app reporting a different version than Homebrew recorded,
-which makes `brew upgrade` misjudge what is current.
-
-### Cask updates
-
-The workflow pushes the new `version` and `sha256` to the
-[tap repository](https://github.com/melnychenkoca/homebrew-movamem) automatically. This needs a
-token, because the default `GITHUB_TOKEN` can only write to this repository:
-
-1. Create a [fine-grained personal access token](https://github.com/settings/personal-access-tokens/new)
-   scoped to **only** `melnychenkoca/homebrew-movamem`, with **Repository permissions →
-   Contents → Read and write**
-2. Add it to this repository as a secret named `TAP_TOKEN`
-   (Settings → Secrets and variables → Actions → New repository secret)
-
-Without the secret the release still succeeds — the tap steps skip, and the workflow log prints
-the `sha256` to paste into the cask by hand.
-
-### Automating the tag too
-
-Tags are deliberately manual: a release should be an explicit act, and the first few are worth
-watching. If that becomes tedious, the natural next step is a small workflow that tags whenever
-`CFBundleShortVersionString` changes on `main` — keeping the plist as the single trigger rather
-than introducing commit-message conventions. Worth adding only once the pipeline has proven
-itself over a few manual releases.
+**Learning on activation records without selecting.** "Learn new apps automatically" saves the
+layout that is *already* active, so there is nothing to switch to. It must therefore leave the
+suppression state above untouched: no notification is coming, so a value armed here would never
+be cleared and would swallow your next genuine switch to that same layout. It also skips apps
+that already have a saved layout, because a stored entry is a deliberate choice and outranks
+whatever happens to be active now.
 
 ## Development
 
