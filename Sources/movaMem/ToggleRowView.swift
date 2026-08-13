@@ -31,10 +31,33 @@ final class ToggleRowView: NSView {
     /// same highlight a standard menu item would.
     private var isHighlighted = false
 
-    /// Menu rows align their text to leave room for the checkmark column, even
-    /// when nothing in the menu is checked. Matching that inset is what keeps
-    /// this row's label lined up with "Add App…" and the app rows above it.
-    private static let horizontalInset: CGFloat = 14
+    /// Where AppKit starts the title of a standard menu item.
+    ///
+    /// Menus reserve a column ahead of every title for the checkmark, whether or
+    /// not anything in the menu is checked, so a title never starts at the menu's
+    /// own edge. A custom view gets none of that for free: at a plain 14pt inset
+    /// these rows started 14pt left of "Add App…" and "Hide Icon" directly above
+    /// and below them, which read as a missing leading space.
+    ///
+    /// 26pt is measured, not guessed — it is what AppKit's own menu item cell
+    /// reports as its title origin at the standard menu font. It is a constant here
+    /// rather than a runtime query because the only way to ask is private API, and
+    /// a wrong-by-a-few-points inset is a cosmetic flaw where a private API
+    /// dependency is a crash waiting for an OS update.
+    private static let titleInset: CGFloat = 26
+
+    /// The trailing inset for the switch. Smaller than the leading one because
+    /// there is no state column on that side — this is just the menu's own margin.
+    private static let trailingInset: CGFloat = 14
+
+    /// How far inside its own frame a label-style NSTextField draws its first
+    /// glyph. Subtracted from titleInset so the *text* lands at titleInset rather
+    /// than the text field's frame doing so.
+    ///
+    /// AppKit does not expose this, and it is stable at 2pt for a bezel-less,
+    /// border-less label — the configuration NSTextField(labelWithString:) produces.
+    private static let labelTextBezel: CGFloat = 2
+
     private static let verticalPadding: CGFloat = 4
     /// Minimum gap between the label and the switch, so a long label never runs
     /// into it.
@@ -49,9 +72,13 @@ final class ToggleRowView: NSView {
     /// is exactly the kind of detail that reads as sloppy.
     ///
     /// The value covers the longer of the two labels at the menu font plus the gap,
-    /// the switch, and both insets. MenuController checks the real fitting width
-    /// against it, so a label that outgrows it cannot silently clip.
-    static let preferredWidth: CGFloat = 260
+    /// the switch, and both insets — measured at 264pt for "Learn new apps
+    /// automatically", with headroom so a small font change does not immediately
+    /// push past it. MenuController takes the max of this and the real fitting
+    /// width, so a label that outgrows it still cannot clip; it just costs the
+    /// shared right edge, which is why this is set above the measurement rather
+    /// than at it.
+    static let preferredWidth: CGFloat = 280
 
     init(title: String, isOn: Bool, onToggle: @escaping (Bool) -> Void) {
         self.onToggle = onToggle
@@ -77,10 +104,17 @@ final class ToggleRowView: NSView {
             self?.reportNewValue(newValue)
         }
 
-        let inset = ToggleRowView.horizontalInset
         let padding = ToggleRowView.verticalPadding
         NSLayoutConstraint.activate([
-            label.leadingAnchor.constraint(equalTo: leadingAnchor, constant: inset),
+            // firstBaselineAnchor is not enough here — the horizontal position is
+            // what matters, and NSTextField draws its text a couple of points
+            // inside its own frame. Constraining the frame to titleInset would put
+            // the glyphs at titleInset + that bezel, so the bezel is subtracted to
+            // land the text itself where AppKit puts a standard title.
+            label.leadingAnchor.constraint(
+                equalTo: leadingAnchor,
+                constant: ToggleRowView.titleInset - ToggleRowView.labelTextBezel
+            ),
             label.centerYAnchor.constraint(equalTo: centerYAnchor),
 
             toggle.leadingAnchor.constraint(
@@ -89,7 +123,10 @@ final class ToggleRowView: NSView {
             ),
             // Pinned to the trailing edge, which is what puts the switch on the
             // right of the menu rather than beside its label.
-            toggle.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -inset),
+            toggle.trailingAnchor.constraint(
+                equalTo: trailingAnchor,
+                constant: -ToggleRowView.trailingInset
+            ),
             toggle.centerYAnchor.constraint(equalTo: centerYAnchor),
             toggle.widthAnchor.constraint(equalToConstant: SwitchControl.controlWidth),
             toggle.heightAnchor.constraint(equalToConstant: SwitchControl.controlHeight),
