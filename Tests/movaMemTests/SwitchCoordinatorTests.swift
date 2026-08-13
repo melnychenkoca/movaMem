@@ -139,15 +139,76 @@ private let french = "com.apple.keylayout.French"
 // MARK: - Recording user changes
 
 @Test func userLayoutChangeIsRecordedAgainstFrontmostApp() {
+    // The app is already managed, which is what entitles a hand-switch to be
+    // recorded with learning off. See the "not managed" tests below for the
+    // case where it is not.
     let input = FakeInputSource(current: canadian, installed: [canadian, french])
     let monitor = FakeAppMonitor(frontmost: "ru.keepcoder.Telegram")
     let store = makeTempStore()
+    store.setLayout(canadian, forBundleID: "ru.keepcoder.Telegram")
 
     let coordinator = SwitchCoordinator(inputSource: input, appMonitor: monitor, store: store)
     coordinator.start()
 
     input.simulateUserSwitch(to: french)
     #expect(store.layout(forBundleID: "ru.keepcoder.Telegram") == french)
+}
+
+@Test func userLayoutChangeInAnUnmanagedAppIsNotRecorded() {
+    // With learning off, a hand-switch must not conjure an entry for an app the
+    // user never added. This is what makes Forget This App stick: forgetting
+    // zoom.us and then changing layout in it once used to bring the entry
+    // straight back, which read as the forget having silently failed.
+    let input = FakeInputSource(current: canadian, installed: [canadian, french])
+    let monitor = FakeAppMonitor(frontmost: "us.zoom.xos")
+    let store = makeTempStore()
+
+    let coordinator = SwitchCoordinator(inputSource: input, appMonitor: monitor, store: store)
+    coordinator.start()
+
+    input.simulateUserSwitch(to: french)
+    #expect(store.isManaged(bundleID: "us.zoom.xos") == false)
+}
+
+@Test func forgottenAppStaysForgottenAcrossActivationAndLayoutChange() {
+    // The end-to-end shape of the reported bug: an app movaMem had learned, then
+    // forgotten, must not return through either entry path — not by being
+    // activated, and not by a hand-switch while it is frontmost.
+    let input = FakeInputSource(current: canadian, installed: [canadian, french])
+    let monitor = FakeAppMonitor()
+    let store = makeTempStore()
+    store.setLayout(french, forBundleID: "us.zoom.xos")
+
+    let coordinator = SwitchCoordinator(inputSource: input, appMonitor: monitor, store: store)
+    coordinator.start()
+
+    store.remove(bundleID: "us.zoom.xos")           // Forget This App
+
+    monitor.simulateActivation(of: "us.zoom.xos")
+    #expect(store.isManaged(bundleID: "us.zoom.xos") == false)
+
+    input.simulateUserSwitch(to: french)
+    #expect(store.isManaged(bundleID: "us.zoom.xos") == false)
+    #expect(store.allEntries().isEmpty)
+}
+
+@Test func userLayoutChangeInAnUnmanagedAppIsRecordedWhenLearningIsOn() {
+    // Learning on is the user asking for exactly this. The guard must gate the
+    // hand-switch path on the preference, not block it outright.
+    let input = FakeInputSource(current: canadian, installed: [canadian, french])
+    let monitor = FakeAppMonitor(frontmost: "us.zoom.xos")
+    let store = makeTempStore()
+
+    let coordinator = SwitchCoordinator(
+        inputSource: input,
+        appMonitor: monitor,
+        store: store,
+        shouldLearnOnActivation: { true }
+    )
+    coordinator.start()
+
+    input.simulateUserSwitch(to: french)
+    #expect(store.layout(forBundleID: "us.zoom.xos") == french)
 }
 
 @Test func ourOwnRestoreIsNotRecorded() {
@@ -520,6 +581,14 @@ private let french = "com.apple.keylayout.French"
     let monitor = FakeAppMonitor()
     let store = makeTempStore()
 
+    // The three apps are managed first — via Add App..., which is what
+    // addAppWithNoLayout models. With learning off, a hand-switch only records
+    // against an app the user has already added, so without this the switches
+    // below teach nothing and there is no layout left to restore.
+    store.addAppWithNoLayout(bundleID: "com.microsoft.VSCode")
+    store.addAppWithNoLayout(bundleID: "com.tinyspeck.slackmacgap")
+    store.addAppWithNoLayout(bundleID: "ru.keepcoder.Telegram")
+
     let coordinator = SwitchCoordinator(inputSource: input, appMonitor: monitor, store: store)
     coordinator.start()
 
@@ -570,7 +639,10 @@ private let french = "com.apple.keylayout.French"
     coordinator.cancelNotedLayout()
 
     // Later the layout becomes available and the user switches to it by hand in a
-    // different app. That is a genuine choice and must be recorded.
+    // different app. That is a genuine choice and must be recorded. The app is
+    // managed so the recording turns purely on the note having been cancelled,
+    // which is what this test is about, rather than on the managed check.
+    store.addAppWithNoLayout(bundleID: "com.b.app")
     monitor.frontmostBundleID = "com.b.app"
     input.installedLayoutIDs.append(french)
     input.simulateUserSwitch(to: french)

@@ -35,9 +35,14 @@ final class SwitchCoordinator {
     /// reinstalled, which this sticky set would not.
     private(set) var unavailableLayoutIDs: Set<String> = []
 
-    /// Whether to record the active layout for an app that has none, at the
-    /// moment that app is activated. Backs the "Learn new apps automatically"
-    /// menu toggle.
+    /// Whether an app movaMem is not yet managing may be added automatically.
+    /// Backs the "Learn new apps automatically" menu toggle.
+    ///
+    /// Governs both ways an unmanaged app can enter the store: recording the
+    /// active layout when the app is activated, and recording a hand-switch
+    /// made while it is frontmost. Both are gated on this one preference so
+    /// that "off" means what it says — nothing enters the store without the
+    /// user adding it — and so Forget This App stays forgotten.
     ///
     /// This is a closure rather than a stored Bool so it is read fresh on every
     /// activation: the user can flip the menu item at any time and the next
@@ -214,6 +219,22 @@ final class SwitchCoordinator {
 
         guard let bundleID = appMonitor.frontmostBundleID else {
             log.debug("Layout changed with no frontmost app; not recording")
+            return
+        }
+
+        // An app movaMem is not managing only becomes managed by a deliberate
+        // act: Add App..., or switching learning on. Recording here regardless
+        // was how a forgotten app silently came back — the user chose Forget
+        // This App, then changed layout in it once, and it reappeared in the
+        // menu as if the forget had never happened.
+        //
+        // Note this reads isManaged, not layout(forBundleID:): an Add App...
+        // entry is managed but still unset, and a hand-switch is exactly how
+        // the user fills it in. Testing the layout instead would treat that
+        // entry as unmanaged and refuse to record, which is the bug this guard
+        // is meant to prevent, pointed the other way.
+        if store.isManaged(bundleID: bundleID) == false && shouldLearnOnActivation() == false {
+            log.debug("Not recording \(newLayout, privacy: .public): \(bundleID, privacy: .public) is not managed")
             return
         }
 

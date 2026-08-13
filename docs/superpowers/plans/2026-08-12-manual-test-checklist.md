@@ -234,10 +234,16 @@ make install && open /Applications/movaMem.app
   Open a row's submenu and choose `Forget This App`. The row disappears, and your current
   layout must not change — forgetting stops management, it does not revert anything.
 
-- [ ] **P2-5: A forgotten app can be re-learned**
+- [ ] **P2-5: A forgotten app stays forgotten**
 
-  After forgetting Slack, go to Slack and switch layout by hand. Slack reappears in the menu
-  with that layout.
+  With `Learn new apps automatically` OFF, forget Slack, then go to Slack and switch layout by
+  hand. Slack must NOT reappear in the menu — an app only enters the list when you add it.
+
+- [ ] **P2-5b: A forgotten app can still be re-learned deliberately**
+
+  Turn `Learn new apps automatically` ON, then go to Slack and switch layout by hand. Slack
+  reappears with that layout. Turning learning on is the deliberate act that re-enables this;
+  `Add App…` is the other.
 
 - [ ] **P2-6: Add App… adds an app that is not running**
 

@@ -18,14 +18,17 @@ layout follows.
   actually made.
 - **Restores automatically** when you return to an app.
 - **Set a layout by hand** from any app's submenu, with a checkmark on the current one.
-- **Forget an app** to stop managing it.
+- **Forget an app** to stop managing it. It stays gone: switching layout while that app is
+  frontmost will not bring it back, unless you turn on automatic learning below.
 - **Add an app you have never opened** via `Add App…`, including one that is not running. It
   starts as `(not set)` and does nothing until you pick a layout.
-- **Learn new apps automatically**, off by default. With it on, the first time you switch to an
-  app movaMem does not know, it saves whatever layout is active right then — useful when that
-  layout is already the one you want there, since watching alone would never see a switch to
-  learn from. It fills in `(not set)` entries too. Leave it off and the list stays limited to
-  apps you chose deliberately.
+- **Learn new apps automatically**, off by default. This is the single switch controlling whether
+  an app movaMem does not know can enter the list on its own — both by being activated, which
+  saves whatever layout is active right then, and by your changing layout while it is frontmost.
+  The first is useful when the active layout is already the one you want there, since watching
+  alone would never see a switch to learn from. It fills in `(not set)` entries too. Leave it off
+  and the list stays limited to apps you chose deliberately, via `Add App…` or by picking a
+  layout for them.
 - **Hide the menu bar icon** if you want it out of the way. The app keeps working; relaunching
   brings the icon back.
 - **Launch at login**, off by default.
@@ -264,6 +267,13 @@ suppression state above untouched: no notification is coming, so a value armed h
 be cleared and would swallow your next genuine switch to that same layout. It also skips apps
 that already have a saved layout, because a stored entry is a deliberate choice and outranks
 whatever happens to be active now.
+
+**Nothing enters the list without a deliberate act.** There are two ways an app could be added
+automatically — activating it, and changing layout while it is frontmost — and both are gated on
+the learning toggle. Only the first was, originally, which made `Forget This App` look broken:
+forgetting an app and then changing layout in it once put the entry straight back, because the
+recording path never asked whether the app was managed. Both paths now answer to the one
+preference, so "off" means the list only ever contains apps you chose.
 
 ## Development
 
