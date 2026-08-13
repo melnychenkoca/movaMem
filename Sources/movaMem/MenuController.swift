@@ -105,6 +105,12 @@ final class MenuController: NSObject {
     }
 
     @objc private func addApp() {
+        // Captured before the panel opens, not after the user picks. The open panel
+        // is a focusable window with a search field, so typing in it can change the
+        // active input source — reading afterwards would store whatever the panel
+        // left behind rather than the layout the user started the action in.
+        let layoutIDAtStart = inputSource.currentLayoutID
+
         let panel = NSOpenPanel()
         panel.canChooseFiles = true
         panel.canChooseDirectories = false
@@ -133,10 +139,14 @@ final class MenuController: NSObject {
         let result = AppPicker.evaluate(appBundleURL: chosenURL, managedBundleIDs: managedBundleIDs)
         switch result {
         case .valid(let bundleID):
-            // Added with no layout. The row shows "(not set)" until the user picks
-            // one from the submenu.
-            store.addAppWithNoLayout(bundleID: bundleID)
-            log.debug("Added \(bundleID, privacy: .public) with no layout")
+            // Added with the layout that was active when the panel opened, so the
+            // app is useful straight away. If that could not be read, the app is
+            // still added and its row shows "(not set)" until the user picks one.
+            store.addApp(bundleID: bundleID, layoutID: layoutIDAtStart)
+            log.debug("""
+            Added \(bundleID, privacy: .public) with \
+            \(layoutIDAtStart ?? "no layout", privacy: .public)
+            """)
 
         case .alreadyManaged(let appName):
             // A silent no-op would look broken, so say so plainly.
@@ -179,6 +189,12 @@ extension MenuController: NSMenuDelegate {
         let addItem = NSMenuItem(title: "Add App…", action: #selector(addApp), keyEquivalent: "")
         addItem.target = self
         menu.addItem(addItem)
+
+        // Directly below Add App... because the two are counterparts: one takes an
+        // app into the list, the other is where an app taken out of it can be put
+        // back. Without this row a forget was invisible and irreversible except by
+        // re-picking the app through the file panel.
+        addForgottenEntry(to: menu)
 
         menu.addItem(NSMenuItem.separator())
         addFooterItems(to: menu)
@@ -375,12 +391,144 @@ extension MenuController: NSMenuDelegate {
         }
     }
 
-    /// Identifies which app a Forget This App item refers to.
-    private final class ForgetTarget: NSObject {
-        let bundleID: String
-        init(bundleID: String) {
-            self.bundleID = bundleID
-            super.init()
+    /// The Forgotten Apps row: a submenu of forgotten apps, or a dimmed dead row.
+    ///
+    /// Always present, so the feature is discoverable before anything has been
+    /// forgotten. When the list is empty the row is disabled and dimmed rather
+    /// than hidden, and carries no submenu — an empty submenu would open onto
+    /// nothing, which reads as a bug.
+    private func addForgottenEntry(to menu: NSMenu) {
+        let bundleIDs = store.forgottenBundleIDs()
+
+        let item = NSMenuItem(title: "Forgotten Apps", action: nil, keyEquivalent: "")
+
+        if bundleIDs.isEmpty {
+            item.isEnabled = false
+            // Same dimming idiom as an unavailable app row. AppKit does not dim a
+            // disabled item that has no action on its own, so the color is set
+            // explicitly.
+            item.attributedTitle = NSAttributedString(
+                string: item.title,
+                attributes: [.foregroundColor: NSColor.disabledControlTextColor]
+            )
+            menu.addItem(item)
+            return
+        }
+
+        let submenu = NSMenu()
+        // Same reason as the main menu and the per-app submenu: AppKit would
+        // otherwise recompute enabled state at display time and ignore what we set.
+        submenu.autoenablesItems = false
+
+        // What a click does is not guessable from a bare list of app names, and
+        // the consequence — the app starts being managed again — is invisible until
+        // it happens. The header says so before the click rather than after.
+        let header = NSMenuItem(title: "Click to add back to the list", action: nil, keyEquivalent: "")
+        header.isEnabled = false
+        header.attributedTitle = NSAttributedString(
+            string: header.title,
+            attributes: [.foregroundColor: NSColor.disabledControlTextColor]
+        )
+        submenu.addItem(header)
+        submenu.addItem(NSMenuItem.separator())
+
+        for bundleID in bundleIDs {
+            submenu.addItem(makeForgottenRow(forBundleID: bundleID))
+        }
+
+        item.submenu = submenu
+        menu.addItem(item)
+    }
+
+    /// One clickable app row, carrying a custom view so the menu survives the click.
+    ///
+    /// The row and its item reference each other: the item owns the view, and the
+    /// view's callback needs the item in order to remove it. The item is therefore
+    /// captured weakly — a strong capture would be a retain cycle, and the item
+    /// outliving its own menu is exactly the case the guard below handles.
+    private func makeForgottenRow(forBundleID bundleID: String) -> NSMenuItem {
+        let item = NSMenuItem()
+
+        // displayName falls back to the raw bundle ID when the app is not
+        // installed, which is the common case here — an app can be forgotten and
+        // then uninstalled. A raw ID is ugly but honest, and still lets the user
+        // identify and clear the entry.
+        let row = StayOpenRowView(title: displayName(forBundleID: bundleID)) { [weak self, weak item] in
+            guard let self, let item else {
+                return
+            }
+            self.unforget(bundleID: bundleID, row: item)
+        }
+
+        // A real frame is required: a zero-height custom view renders as a sliver.
+        // Unlike the toggles there is no shared right edge to respect here, so the
+        // row takes its own fitting width, floored at the toggles' width so the
+        // submenu does not end up narrower than the menu it hangs off.
+        let fitting = row.fittingSize
+        row.frame = NSRect(
+            x: 0,
+            y: 0,
+            width: max(fitting.width, ToggleRowView.preferredWidth),
+            height: fitting.height
+        )
+        item.view = row
+        return item
+    }
+
+    /// Un-forgets an app and takes its row out of the open submenu.
+    ///
+    /// The removal has to happen here rather than being left to a rebuild:
+    /// menuNeedsUpdate only fires when a menu opens, and the whole point of the
+    /// custom row is that the menu stays open — so a row left in place would sit
+    /// there claiming the app is still forgotten after it had been added back.
+    private func unforget(bundleID: String, row: NSMenuItem) {
+        // Read at the moment of the click: the layout active now is the one the
+        // user was typing in the app they came from, which is the best available
+        // guess at what they want this app to use. Nil is tolerated — the app comes
+        // back unset rather than not coming back.
+        let layoutID = inputSource.currentLayoutID
+        store.unforget(bundleID: bundleID, layoutID: layoutID)
+        log.debug("""
+        Un-forgot \(bundleID, privacy: .public) with \
+        \(layoutID ?? "no layout", privacy: .public)
+        """)
+
+        guard let submenu = row.menu else {
+            // Already detached. Nothing to remove, and the store change above is
+            // what actually mattered.
+            return
+        }
+        submenu.removeItem(row)
+
+        // Both reads happen BEFORE the parent rebuild below. That rebuild calls
+        // removeAllItems on the parent, which releases the item owning this
+        // submenu — so anything asked of `submenu` afterwards would be operating on
+        // a menu already detached from the hierarchy. Order is load-bearing here,
+        // not stylistic.
+        //
+        // Count the app rows, not the items: the header and its separator are
+        // always present, so checking isEmpty would never fire.
+        let isLastRow = submenu.items.contains { $0.view is StayOpenRowView } == false
+        let parent = submenu.supermenu
+
+        if isLastRow {
+            // Nothing left to click, so this submenu has to come down — but NOT via
+            // cancelTracking(), which ends the whole menu session and would take the
+            // main menu with it. Detaching the submenu from its owning item collapses
+            // it while leaving the main menu up, where the app can be seen arriving
+            // in the managed list and the Forgotten Apps row going dimmed.
+            if let parent, let owner = parent.items.first(where: { $0.submenu === submenu }) {
+                owner.submenu = nil
+            }
+        }
+
+        // Rebuild the parent so the app appears in the managed list right away.
+        // menuNeedsUpdate only fires when a menu opens, and the whole point of the
+        // custom row is that this one stays open — so without this the app was
+        // correctly stored but invisible until the menu was closed and reopened,
+        // which read as the click having half-worked.
+        if let parent {
+            menuNeedsUpdate(parent)
         }
     }
 
@@ -485,16 +633,73 @@ extension MenuController: NSMenuDelegate {
 
         submenu.addItem(NSMenuItem.separator())
 
-        let forgetItem = NSMenuItem(
-            title: "Forget This App",
-            action: #selector(forgetApp(_:)),
-            keyEquivalent: ""
-        )
-        forgetItem.target = self
-        forgetItem.representedObject = ForgetTarget(bundleID: bundleID)
-        submenu.addItem(forgetItem)
+        submenu.addItem(makeForgetRow(forBundleID: bundleID))
 
         return submenu
+    }
+
+    /// The Forget This App row, carrying a custom view so the main menu survives.
+    ///
+    /// This row's own submenu cannot survive: forgetting deletes the app the
+    /// submenu belongs to, so it closes either way. What is worth keeping open is
+    /// the menu above it, where the app can then be seen moving out of the managed
+    /// list and into Forgotten Apps.
+    private func makeForgetRow(forBundleID bundleID: String) -> NSMenuItem {
+        let item = NSMenuItem()
+
+        let row = StayOpenRowView(title: "Forget This App") { [weak self, weak item] in
+            guard let self, let item else {
+                return
+            }
+            self.forget(bundleID: bundleID, row: item)
+        }
+
+        // A real frame is required: a zero-height custom view renders as a sliver.
+        let fitting = row.fittingSize
+        row.frame = NSRect(
+            x: 0,
+            y: 0,
+            width: max(fitting.width, ToggleRowView.preferredWidth),
+            height: fitting.height
+        )
+        item.view = row
+        return item
+    }
+
+    /// Forgets an app and moves it into the Forgotten Apps list without closing
+    /// the main menu.
+    ///
+    /// Only the remembered preference goes away. The layout the user is currently
+    /// typing in is deliberately left alone — forgetting an app means movaMem stops
+    /// managing it, not that anything gets reverted.
+    private func forget(bundleID: String, row: NSMenuItem) {
+        store.remove(bundleID: bundleID)
+        log.debug("Forgot \(bundleID, privacy: .public)")
+
+        // Captured before the rebuild below, which detaches this row from the
+        // hierarchy and would leave nothing to walk up from.
+        let appSubmenu = row.menu
+        let mainMenu = appSubmenu?.supermenu
+
+        // NOT cancelTracking(). That is documented as ending *all* menu tracking —
+        // tracking is per-session, not per-menu — so calling it on this app's
+        // submenu tore down the main menu along with it, which is the opposite of
+        // what forgetting an app should do.
+        //
+        // Detaching the submenu from the item that owns it collapses the open
+        // submenu without touching the session, so the main menu stays up. The
+        // rebuild below discards this item anyway; this is what makes the
+        // already-open submenu disappear rather than hang over a stale row.
+        if let mainMenu, let owner = mainMenu.items.first(where: { $0.submenu === appSubmenu }) {
+            owner.submenu = nil
+        }
+
+        // Rebuild the main menu so the app is visibly gone from the managed list
+        // and present under Forgotten Apps straight away. Without this the row
+        // would sit there showing a layout for an app that is no longer managed.
+        if let mainMenu {
+            menuNeedsUpdate(mainMenu)
+        }
     }
 
     @objc private func chooseLayout(_ sender: NSMenuItem) {
@@ -536,18 +741,6 @@ extension MenuController: NSMenuDelegate {
                 coordinator.cancelNotedLayout()
             }
         }
-    }
-
-    @objc private func forgetApp(_ sender: NSMenuItem) {
-        guard let target = sender.representedObject as? ForgetTarget else {
-            log.error("Forget menu item had no ForgetTarget attached")
-            return
-        }
-        // Only the remembered preference goes away. The layout the user is
-        // currently typing in is deliberately left alone — forgetting an app
-        // means movaMem stops managing it, not that anything gets reverted.
-        store.remove(bundleID: target.bundleID)
-        log.debug("Forgot \(target.bundleID, privacy: .public)")
     }
 
     /// Human-readable app name, falling back to the bundle ID when the app is no

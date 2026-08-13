@@ -31,45 +31,6 @@ final class ToggleRowView: NSView {
     /// same highlight a standard menu item would.
     private var isHighlighted = false
 
-    /// Where AppKit starts the title of a standard menu item.
-    ///
-    /// Menus reserve a column ahead of every title for the checkmark, whether or
-    /// not anything in the menu is checked, so a title never starts at the menu's
-    /// own edge. A custom view gets none of that for free: at a plain 14pt inset
-    /// these rows started 14pt left of "Add App…" and "Hide Icon" directly above
-    /// and below them, which read as a missing leading space.
-    ///
-    /// 18pt is the width of the checkmark column AppKit reserves, taken from
-    /// `NSMenuItem.onStateImage.size.width` at the standard menu font. Since this
-    /// row spans the menu's full width, that column width is exactly the offset a
-    /// standard title sits at.
-    ///
-    /// A first attempt used 26pt, read from `NSMenuItemCell.titleRect(forBounds:)`.
-    /// That number is real but is measured from the *cell's* origin, and AppKit
-    /// insets the cell within the menu — so applying it from this row's own edge
-    /// double-counted the margin and pushed the labels visibly right of "Add App…".
-    /// Cross-checked against total chrome: a standard item's menu is 32.7pt wider
-    /// than its title text, which splits into roughly this leading inset plus the
-    /// trailing one below.
-    ///
-    /// A constant rather than a runtime query, because being a point or two off is
-    /// cosmetic where depending on private layout API is a crash waiting for an OS
-    /// update.
-    private static let titleInset: CGFloat = 18
-
-    /// The trailing inset for the switch. Smaller than the leading one because
-    /// there is no state column on that side — this is just the menu's own margin.
-    private static let trailingInset: CGFloat = 14
-
-    /// How far inside its own frame a label-style NSTextField draws its first
-    /// glyph. Subtracted from titleInset so the *text* lands at titleInset rather
-    /// than the text field's frame doing so.
-    ///
-    /// AppKit does not expose this, and it is stable at 2pt for a bezel-less,
-    /// border-less label — the configuration NSTextField(labelWithString:) produces.
-    private static let labelTextBezel: CGFloat = 2
-
-    private static let verticalPadding: CGFloat = 4
     /// Minimum gap between the label and the switch, so a long label never runs
     /// into it.
     private static let labelToSwitchGap: CGFloat = 16
@@ -115,7 +76,7 @@ final class ToggleRowView: NSView {
             self?.reportNewValue(newValue)
         }
 
-        let padding = ToggleRowView.verticalPadding
+        let padding = MenuRowMetrics.verticalPadding
         NSLayoutConstraint.activate([
             // firstBaselineAnchor is not enough here — the horizontal position is
             // what matters, and NSTextField draws its text a couple of points
@@ -124,7 +85,7 @@ final class ToggleRowView: NSView {
             // land the text itself where AppKit puts a standard title.
             label.leadingAnchor.constraint(
                 equalTo: leadingAnchor,
-                constant: ToggleRowView.titleInset - ToggleRowView.labelTextBezel
+                constant: MenuRowMetrics.titleInset - MenuRowMetrics.labelTextBezel
             ),
             label.centerYAnchor.constraint(equalTo: centerYAnchor),
 
@@ -136,7 +97,7 @@ final class ToggleRowView: NSView {
             // right of the menu rather than beside its label.
             toggle.trailingAnchor.constraint(
                 equalTo: trailingAnchor,
-                constant: -ToggleRowView.trailingInset
+                constant: -MenuRowMetrics.trailingInset
             ),
             toggle.centerYAnchor.constraint(equalTo: centerYAnchor),
             toggle.widthAnchor.constraint(equalToConstant: SwitchControl.controlWidth),
@@ -204,15 +165,7 @@ final class ToggleRowView: NSView {
         guard isHighlighted else {
             return
         }
-        // selectedContentBackgroundColor is the color AppKit uses for a
-        // highlighted menu row, so this tracks the system accent color and both
-        // light and dark appearance without any color of our own.
-        NSColor.selectedContentBackgroundColor.setFill()
-        // Inset horizontally to match the rounded highlight macOS draws inside
-        // the menu's own padding, rather than bleeding to the full width.
-        let highlightRect = bounds.insetBy(dx: 5, dy: 0)
-        let path = NSBezierPath(roundedRect: highlightRect, xRadius: 4, yRadius: 4)
-        path.fill()
+        MenuRowMetrics.drawHighlight(in: bounds)
     }
 
     /// Applies the label color for the current highlight state.

@@ -149,6 +149,170 @@ private func makeTempFileURL() -> URL {
     #expect(second.isForgotten(bundleID: "com.a.app") == true)
 }
 
+// MARK: - Listing and un-forgetting
+
+@Test func forgottenBundleIDsIsEmptyWhenNothingForgotten() {
+    let store = LayoutStore(fileURL: makeTempFileURL())
+    #expect(store.forgottenBundleIDs().isEmpty)
+}
+
+@Test func forgottenBundleIDsAreReturnedSorted() {
+    // Sorted for the same reason allEntries() is: the menu builds its rows
+    // straight from this, and Set iteration order is not stable between runs,
+    // so an unsorted return would reshuffle the list every time it is opened.
+    let store = LayoutStore(fileURL: makeTempFileURL())
+    store.remove(bundleID: "zzz.app")
+    store.remove(bundleID: "aaa.app")
+    store.remove(bundleID: "mmm.app")
+
+    #expect(store.forgottenBundleIDs() == ["aaa.app", "mmm.app", "zzz.app"])
+}
+
+@Test func unforgetClearsTheMarkAndManagesTheAppUnset() {
+    // The state the user expects from the Forgotten Apps menu: one click puts
+    // the app back in the list, showing "(not set)" until a layout is picked.
+    let store = LayoutStore(fileURL: makeTempFileURL())
+    store.remove(bundleID: "com.a.app")
+
+    store.unforget(bundleID: "com.a.app")
+
+    #expect(store.isForgotten(bundleID: "com.a.app") == false)
+    #expect(store.isManaged(bundleID: "com.a.app") == true)
+    #expect(store.layout(forBundleID: "com.a.app") == nil)
+    #expect(store.forgottenBundleIDs().isEmpty)
+}
+
+@Test func unforgetDoesNotWipeAnExistingLayout() {
+    // An app can be both managed and forgotten only through an odd sequence,
+    // but if it happens the remembered layout must survive: addAppWithNoLayout
+    // guards against overwriting it, and unforget must not defeat that guard.
+    let store = LayoutStore(fileURL: makeTempFileURL())
+    store.setLayout("com.apple.keylayout.French", forBundleID: "com.a.app")
+    store.remove(bundleID: "com.a.app")
+    store.setLayout("com.apple.keylayout.French", forBundleID: "com.a.app")
+
+    store.unforget(bundleID: "com.a.app")
+
+    #expect(store.isForgotten(bundleID: "com.a.app") == false)
+    #expect(store.layout(forBundleID: "com.a.app") == "com.apple.keylayout.French")
+}
+
+@Test func unforgetOnANeverForgottenAppStillManagesIt() {
+    // Reachable from a stale menu item. It must not throw or corrupt anything;
+    // registering the app unset is the same outcome Add App... would produce.
+    let store = LayoutStore(fileURL: makeTempFileURL())
+    store.unforget(bundleID: "com.never.forgotten")
+
+    #expect(store.isForgotten(bundleID: "com.never.forgotten") == false)
+    #expect(store.isManaged(bundleID: "com.never.forgotten") == true)
+}
+
+@Test func unforgetSurvivesReload() {
+    // The clear has to reach disk, or the app would come back forgotten on the
+    // next launch and silently stop being learned again.
+    let url = makeTempFileURL()
+    let first = LayoutStore(fileURL: url)
+    first.remove(bundleID: "com.a.app")
+    first.unforget(bundleID: "com.a.app")
+
+    let second = LayoutStore(fileURL: url)
+    #expect(second.isForgotten(bundleID: "com.a.app") == false)
+    #expect(second.isManaged(bundleID: "com.a.app") == true)
+    #expect(second.forgottenBundleIDs().isEmpty)
+}
+
+@Test func unforgetWithALayoutStoresThatLayout() {
+    // Adding an app back captures whatever layout is active at that moment, so the
+    // app is immediately useful instead of sitting at "(not set)" until the user
+    // switches layouts inside it once.
+    let store = LayoutStore(fileURL: makeTempFileURL())
+    store.remove(bundleID: "com.a.app")
+
+    store.unforget(bundleID: "com.a.app", layoutID: "com.apple.keylayout.Ukrainian-PC")
+
+    #expect(store.isForgotten(bundleID: "com.a.app") == false)
+    #expect(store.layout(forBundleID: "com.a.app") == "com.apple.keylayout.Ukrainian-PC")
+}
+
+@Test func unforgetWithNilLayoutLeavesTheAppUnset() {
+    // currentLayoutID is documented as nil-able. The app must still come back —
+    // falling back to unset is strictly better than refusing to add it.
+    let store = LayoutStore(fileURL: makeTempFileURL())
+    store.remove(bundleID: "com.a.app")
+
+    store.unforget(bundleID: "com.a.app", layoutID: nil)
+
+    #expect(store.isForgotten(bundleID: "com.a.app") == false)
+    #expect(store.isManaged(bundleID: "com.a.app") == true)
+    #expect(store.layout(forBundleID: "com.a.app") == nil)
+}
+
+@Test func unforgetWithALayoutOverwritesAStaleRememberedLayout() {
+    // An app can carry an old layout from before it was forgotten. The layout
+    // active now is the more recent expression of intent, so it wins — otherwise
+    // adding an app back would silently restore a layout the user had moved on
+    // from, with no indication of where it came from.
+    let store = LayoutStore(fileURL: makeTempFileURL())
+    store.setLayout("com.apple.keylayout.French", forBundleID: "com.a.app")
+    store.remove(bundleID: "com.a.app")
+
+    store.unforget(bundleID: "com.a.app", layoutID: "com.apple.keylayout.Canadian")
+
+    #expect(store.layout(forBundleID: "com.a.app") == "com.apple.keylayout.Canadian")
+}
+
+@Test func unforgetWithALayoutSurvivesReload() {
+    let url = makeTempFileURL()
+    let first = LayoutStore(fileURL: url)
+    first.remove(bundleID: "com.a.app")
+    first.unforget(bundleID: "com.a.app", layoutID: "com.apple.keylayout.Canadian")
+
+    let second = LayoutStore(fileURL: url)
+    #expect(second.isForgotten(bundleID: "com.a.app") == false)
+    #expect(second.layout(forBundleID: "com.a.app") == "com.apple.keylayout.Canadian")
+}
+
+@Test func addAppWithALayoutStoresIt() {
+    // Add App... captures the active layout the same way, so a newly added app is
+    // useful immediately rather than starting unset.
+    let store = LayoutStore(fileURL: makeTempFileURL())
+    store.addApp(bundleID: "com.a.app", layoutID: "com.apple.keylayout.Ukrainian-PC")
+
+    #expect(store.isManaged(bundleID: "com.a.app") == true)
+    #expect(store.layout(forBundleID: "com.a.app") == "com.apple.keylayout.Ukrainian-PC")
+}
+
+@Test func addAppWithNilLayoutLeavesItUnset() {
+    let store = LayoutStore(fileURL: makeTempFileURL())
+    store.addApp(bundleID: "com.a.app", layoutID: nil)
+
+    #expect(store.isManaged(bundleID: "com.a.app") == true)
+    #expect(store.layout(forBundleID: "com.a.app") == nil)
+}
+
+@Test func addAppDoesNotOverwriteAnAlreadyManagedApp() {
+    // Add App... is reachable for an app already in the list. Capturing the
+    // current layout must not clobber the one the user deliberately chose — the
+    // same protection addAppWithNoLayout has always had.
+    let store = LayoutStore(fileURL: makeTempFileURL())
+    store.setLayout("com.apple.keylayout.French", forBundleID: "com.a.app")
+
+    store.addApp(bundleID: "com.a.app", layoutID: "com.apple.keylayout.Canadian")
+
+    #expect(store.layout(forBundleID: "com.a.app") == "com.apple.keylayout.French")
+}
+
+@Test func unforgetLeavesOtherForgottenAppsAlone() {
+    let store = LayoutStore(fileURL: makeTempFileURL())
+    store.remove(bundleID: "com.a.app")
+    store.remove(bundleID: "com.b.app")
+
+    store.unforget(bundleID: "com.a.app")
+
+    #expect(store.forgottenBundleIDs() == ["com.b.app"])
+    #expect(store.isForgotten(bundleID: "com.b.app") == true)
+}
+
 @Test func aVersion2FileLoadsWithNothingForgotten() throws {
     // The upgrade case that matters for existing installs: a v2 file has no
     // forgotten key at all, and must load with an empty list rather than

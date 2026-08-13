@@ -125,6 +125,16 @@ final class LayoutStore {
         return forgotten.contains(bundleID)
     }
 
+    /// Every app the user explicitly forgot, sorted by bundle ID.
+    ///
+    /// Sorted for the same reason allEntries() is: the Forgotten Apps menu builds
+    /// its rows straight from this, and Set iteration order is not stable between
+    /// runs, so returning the set's own order would reshuffle the list every time
+    /// the menu opened.
+    func forgottenBundleIDs() -> [String] {
+        return forgotten.sorted()
+    }
+
     /// All entries, sorted by bundle ID so the menu order is stable between openings.
     ///
     /// An entry whose layoutID is nil is managed but unset; the menu shows it as
@@ -195,6 +205,70 @@ final class LayoutStore {
         // repeated forget expresses the same rejection, and recording it is both
         // harmless and more faithful to what the user asked for.
         forgotten.insert(bundleID)
+        save()
+    }
+
+    /// Registers an app, capturing the layout that is active right now.
+    ///
+    /// Used by Add App..., so a newly added app is immediately useful rather than
+    /// sitting at "(not set)" until the user happens to switch layouts inside it.
+    /// A nil layoutID means the active layout could not be determined; the app is
+    /// still added, just unset, because refusing to add it would be a worse
+    /// outcome than an unset entry the user can fill in from the submenu.
+    ///
+    /// Like addAppWithNoLayout, this refuses to touch an app that is already
+    /// managed — the layout it already carries was chosen deliberately, and the
+    /// layout that happens to be active now is not a reason to overwrite it.
+    func addApp(bundleID: String, layoutID: String?) {
+        if isManaged(bundleID: bundleID) {
+            log.debug("addApp ignored: \(bundleID, privacy: .public) is already managed")
+            return
+        }
+
+        guard let layoutID else {
+            addAppWithNoLayout(bundleID: bundleID)
+            return
+        }
+        // setLayout already clears the forgotten mark and saves.
+        setLayout(layoutID, forBundleID: bundleID)
+    }
+
+    /// Reverses a forget, capturing the layout that is active right now.
+    ///
+    /// Same reasoning as addApp: the app comes back ready to use. This deliberately
+    /// DOES overwrite a layout left over from before the app was forgotten — that
+    /// entry is stale by definition, and silently restoring it would apply a layout
+    /// the user had moved on from with nothing on screen explaining where it came
+    /// from. The layout active at the moment of the click is the more recent, more
+    /// deliberate signal.
+    func unforget(bundleID: String, layoutID: String?) {
+        guard let layoutID else {
+            unforget(bundleID: bundleID)
+            return
+        }
+        // setLayout clears the forgotten mark and saves, so this needs nothing else.
+        setLayout(layoutID, forBundleID: bundleID)
+    }
+
+    /// Reverses a forget: clears the mark and puts the app back in the list unset.
+    ///
+    /// This is the Forgotten Apps menu's only action. It lands the app in exactly
+    /// the state Add App... produces — managed, no layout, showing "(not set)" —
+    /// so one click makes the app visibly present again with a layout to pick.
+    ///
+    /// The order matters. `addAppWithNoLayout` returns early for an app that is
+    /// already managed, in order to protect a remembered layout from being wiped.
+    /// Clearing the mark first, and unconditionally, means that guard cannot also
+    /// swallow the un-forget and leave the app marked forgotten with an entry
+    /// present — a state where the menu shows a layout that learning refuses to
+    /// touch. Both paths still save: the early return does not, but the explicit
+    /// save below covers it.
+    func unforget(bundleID: String) {
+        forgotten.remove(bundleID)
+        // Registers the app unset, or leaves an existing entry untouched.
+        addAppWithNoLayout(bundleID: bundleID)
+        // Unconditional because addAppWithNoLayout may have returned early
+        // without saving, and the mark cleared above must still reach disk.
         save()
     }
 
