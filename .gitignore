@@ -11,6 +11,7 @@ Resources/AppIcon.icns
 
 # Subagent-driven development scratch (ledger, briefs, review packages)
 .superpowers/
+.docs/
 
 # macOS
 .DS_Store
