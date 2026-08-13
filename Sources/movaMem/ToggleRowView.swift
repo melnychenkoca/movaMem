@@ -39,12 +39,23 @@ final class ToggleRowView: NSView {
     /// these rows started 14pt left of "Add App…" and "Hide Icon" directly above
     /// and below them, which read as a missing leading space.
     ///
-    /// 26pt is measured, not guessed — it is what AppKit's own menu item cell
-    /// reports as its title origin at the standard menu font. It is a constant here
-    /// rather than a runtime query because the only way to ask is private API, and
-    /// a wrong-by-a-few-points inset is a cosmetic flaw where a private API
-    /// dependency is a crash waiting for an OS update.
-    private static let titleInset: CGFloat = 26
+    /// 18pt is the width of the checkmark column AppKit reserves, taken from
+    /// `NSMenuItem.onStateImage.size.width` at the standard menu font. Since this
+    /// row spans the menu's full width, that column width is exactly the offset a
+    /// standard title sits at.
+    ///
+    /// A first attempt used 26pt, read from `NSMenuItemCell.titleRect(forBounds:)`.
+    /// That number is real but is measured from the *cell's* origin, and AppKit
+    /// insets the cell within the menu — so applying it from this row's own edge
+    /// double-counted the margin and pushed the labels visibly right of "Add App…".
+    /// Cross-checked against total chrome: a standard item's menu is 32.7pt wider
+    /// than its title text, which splits into roughly this leading inset plus the
+    /// trailing one below.
+    ///
+    /// A constant rather than a runtime query, because being a point or two off is
+    /// cosmetic where depending on private layout API is a crash waiting for an OS
+    /// update.
+    private static let titleInset: CGFloat = 18
 
     /// The trailing inset for the switch. Smaller than the leading one because
     /// there is no state column on that side — this is just the menu's own margin.
