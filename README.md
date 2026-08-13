@@ -217,7 +217,8 @@ Carbon TIS ──"layout → Ukrainian"──┘           │
 | `AppPicker` | Decides whether a chosen app can be managed |
 | `AppVersion` | Formats the version row from the bundle's own Info.plist |
 | `Preferences` | The settings that persist across launches |
-| `ToggleRowView` | A menu row that shows a real switch instead of a checkmark |
+| `ToggleRowView` | A menu row that shows a switch instead of a checkmark |
+| `SwitchControl` | Draws the switch itself, so its "on" blue survives in a menu |
 | `StatusGlyph` | Draws the "mM" menu bar glyph as a template image |
 | `Tools/make-icon.swift` | Draws the app icon; not part of the app target |
 | `main.swift` | Wires the pieces together; no logic of its own |
@@ -229,8 +230,8 @@ around.
 
 ### Design notes
 
-Three decisions worth knowing about, the first two driven by measured behavior rather than
-assumption:
+Five decisions worth knowing about, each driven by measured behavior rather than assumption — the
+kind that looks arbitrary until you hit the case that forced it:
 
 **Suppression stores a layout ID, not a flag.** movaMem must ignore the layout-change notification
 caused by its own switching. The obvious approach is a boolean, and it is wrong: selecting an
@@ -244,10 +245,18 @@ state in between.
 **The two settings use switches, not checkmarks.** `NSMenuItem.state` can only draw a checkmark,
 so a switch means replacing the row with a custom view — and taking over the label, the pointer
 highlight, and the click that AppKit would otherwise handle. Both toggles go through the same
-row type so they cannot drift apart, and the fonts, colors, and metrics come from AppKit
-(`menuFont`, `selectedContentBackgroundColor`, `fittingSize`) rather than hardcoded values that
-would only look right on one macOS version. Clicking anywhere on the row toggles it, matching how
-a standard menu item behaves across its full width.
+row type so they cannot drift apart. Clicking anywhere on the row toggles it, matching how a
+standard menu item behaves across its full width, and the menu deliberately stays open afterwards:
+these are settings you may want to flip and then look at, and dismissing on click made the change
+feel cancelled rather than applied.
+
+**The switch is drawn by hand, because `NSSwitch` is unreadable in a menu.** `NSSwitch` fills its
+on state with the system accent color, and macOS desaturates accent colors in any window that is
+not key. A menu is never key, so a stock switch renders "on" as the same grey as "off",
+distinguished only by knob position. Drawing the track ourselves keeps the blue at full saturation,
+so the two states differ by color *and* position. Both switches also sit on a shared right edge
+rather than tracking their own label widths, which would leave two controls of the same kind
+misaligned.
 
 **Learning on activation records without selecting.** "Learn new apps automatically" saves the
 layout that is *already* active, so there is nothing to switch to. It must therefore leave the

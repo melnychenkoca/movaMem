@@ -204,9 +204,11 @@ extension MenuController: NSMenuDelegate {
     /// does not route clicks on a custom view through the item's action. Both
     /// toggles go through here so they cannot drift apart.
     ///
-    /// The frame comes from fittingSize rather than a fixed number — too narrow
-    /// clips the switch off the right edge, too wide pads the menu out — and a
-    /// real frame is required at all, since a zero-height view renders as a sliver.
+    /// Every toggle row gets the same width, so both switches land on the same
+    /// right edge instead of tracking their own label lengths. The max() guards the
+    /// case where a label is longer than that width allows, which would otherwise
+    /// clip the switch — a real frame is required either way, since a zero-height
+    /// view renders as a sliver.
     private func makeToggleItem(
         title: String,
         isOn: Bool,
@@ -218,16 +220,12 @@ extension MenuController: NSMenuDelegate {
         row.frame = NSRect(
             x: 0,
             y: 0,
-            width: max(fitting.width, MenuController.minimumToggleRowWidth),
+            width: max(fitting.width, ToggleRowView.preferredWidth),
             height: fitting.height
         )
         item.view = row
         return item
     }
-
-    /// A floor only, so a short label still gives a comfortable row. Menus size to
-    /// their widest row, so the app rows above usually win anyway.
-    private static let minimumToggleRowWidth: CGFloat = 220
 
     /// A load failure is the more serious problem — it means the layouts the
     /// user already had are gone from memory this launch, not just that new

@@ -1,11 +1,13 @@
 import AppKit
 
-/// A menu row that shows a real NSSwitch instead of a checkmark.
+/// A menu row that shows a switch instead of a checkmark.
 ///
 /// A standard NSMenuItem can only render its on/off state as a checkmark — that
 /// is what `NSMenuItem.state` draws, and there is no switch style to ask for. The
 /// only way to get a switch is to replace the row's content with a custom view,
 /// which is what this is.
+///
+/// The switch is SwitchControl rather than NSSwitch; see that type for why.
 ///
 /// Taking over the row means taking over everything AppKit would otherwise do for
 /// it: the label, the highlight when the pointer is over the row, and the click.
@@ -23,7 +25,7 @@ final class ToggleRowView: NSView {
     private let onToggle: (Bool) -> Void
 
     private let label: NSTextField
-    private let toggle: NSSwitch
+    private let toggle: SwitchControl
 
     /// Tracks whether the pointer is inside the row, so the row can paint the
     /// same highlight a standard menu item would.
@@ -34,8 +36,22 @@ final class ToggleRowView: NSView {
     /// this row's label lined up with "Add App…" and the app rows above it.
     private static let horizontalInset: CGFloat = 14
     private static let verticalPadding: CGFloat = 4
-    /// Gap between the label and the switch, so a long label never touches it.
-    private static let labelToSwitchGap: CGFloat = 12
+    /// Minimum gap between the label and the switch, so a long label never runs
+    /// into it.
+    private static let labelToSwitchGap: CGFloat = 16
+
+    /// The width every toggle row asks for.
+    ///
+    /// Fixed rather than derived from the label, so both switches land on the same
+    /// right edge. Sizing each row to its own text would put the two switches at
+    /// different x positions — "Launch at Login" is much shorter than "Learn new
+    /// apps automatically" — and two controls of the same kind failing to line up
+    /// is exactly the kind of detail that reads as sloppy.
+    ///
+    /// The value covers the longer of the two labels at the menu font plus the gap,
+    /// the switch, and both insets. MenuController checks the real fitting width
+    /// against it, so a label that outgrows it cannot silently clip.
+    static let preferredWidth: CGFloat = 260
 
     init(title: String, isOn: Bool, onToggle: @escaping (Bool) -> Void) {
         self.onToggle = onToggle
@@ -49,8 +65,7 @@ final class ToggleRowView: NSView {
         label.font = menuFont
         label.translatesAutoresizingMaskIntoConstraints = false
 
-        toggle = NSSwitch()
-        toggle.state = isOn ? .on : .off
+        toggle = SwitchControl(isOn: isOn)
         toggle.translatesAutoresizingMaskIntoConstraints = false
 
         super.init(frame: .zero)
@@ -58,8 +73,9 @@ final class ToggleRowView: NSView {
         addSubview(label)
         addSubview(toggle)
 
-        toggle.target = self
-        toggle.action = #selector(switchFlipped)
+        toggle.onToggle = { [weak self] newValue in
+            self?.reportNewValue(newValue)
+        }
 
         let inset = ToggleRowView.horizontalInset
         let padding = ToggleRowView.verticalPadding
@@ -71,12 +87,16 @@ final class ToggleRowView: NSView {
                 greaterThanOrEqualTo: label.trailingAnchor,
                 constant: ToggleRowView.labelToSwitchGap
             ),
+            // Pinned to the trailing edge, which is what puts the switch on the
+            // right of the menu rather than beside its label.
             toggle.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -inset),
             toggle.centerYAnchor.constraint(equalTo: centerYAnchor),
+            toggle.widthAnchor.constraint(equalToConstant: SwitchControl.controlWidth),
+            toggle.heightAnchor.constraint(equalToConstant: SwitchControl.controlHeight),
 
-            // The row's height follows the switch, which is the taller of the two,
-            // rather than a hardcoded number.
-            heightAnchor.constraint(greaterThanOrEqualTo: toggle.heightAnchor, constant: padding * 2),
+            // The label is the taller element now that the switch is small, so the
+            // row height follows it.
+            heightAnchor.constraint(greaterThanOrEqualTo: label.heightAnchor, constant: padding * 2),
         ])
 
         applyLabelColor()
@@ -94,7 +114,7 @@ final class ToggleRowView: NSView {
     /// showing — but a row that displayed a stale value would be actively
     /// misleading, so it is worth the two lines.
     func setOn(_ isOn: Bool) {
-        toggle.state = isOn ? .on : .off
+        toggle.setOn(isOn)
     }
 
     // MARK: - Highlight
@@ -172,24 +192,27 @@ final class ToggleRowView: NSView {
 
     // MARK: - Clicks
 
-    @objc private func switchFlipped() {
-        reportNewValue(toggle.state == .on)
-    }
-
     /// Clicking anywhere on the row toggles it, not just the switch itself. A
-    /// standard menu item responds to a click across its whole width, and a row
-    /// that only responded on a small control at the far right would feel broken.
+    /// standard menu item responds across its whole width, and a row that only
+    /// responded on a small control at the far right would feel broken.
+    ///
+    /// A click that lands on the switch does not reach here: SwitchControl handles
+    /// its own mouseDown and AppKit routes the event to it, so the value is
+    /// reported exactly once either way.
     override func mouseDown(with event: NSEvent) {
-        let newValue = toggle.state != .on
-        toggle.state = newValue ? .on : .off
-        reportNewValue(newValue)
+        toggle.toggle()
     }
 
+    /// Reports the new value and deliberately leaves the menu open.
+    ///
+    /// An earlier version called cancelTracking() here to mimic a standard menu
+    /// item, which dismisses on click. That is wrong for a switch: a switch is a
+    /// setting you may want to flip and then look at, or set alongside the other
+    /// toggle, and closing the menu out from under the click made the change feel
+    /// like it had been cancelled rather than applied. Staying open also means the
+    /// switch's new position is visible immediately, which is the whole point of
+    /// showing a switch instead of a checkmark.
     private func reportNewValue(_ newValue: Bool) {
         onToggle(newValue)
-        // Dismiss the menu, which is what a standard menu item does on click.
-        // Without this the menu stays open and the row's own action has already
-        // fired, so a second click would read as the toggle bouncing back.
-        enclosingMenuItem?.menu?.cancelTracking()
     }
 }
