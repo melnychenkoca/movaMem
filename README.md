@@ -18,8 +18,9 @@ layout follows.
   actually made.
 - **Restores automatically** when you return to an app.
 - **Set a layout by hand** from any app's submenu, with a checkmark on the current one.
-- **Forget an app** to stop managing it. It stays gone: switching layout while that app is
-  frontmost will not bring it back, unless you turn on automatic learning below.
+- **Forget an app** to stop managing it, and it stays forgotten. Nothing automatic brings it
+  back — not reopening it, not switching layout while it is frontmost, and not automatic
+  learning. To manage it again, pick a layout from its submenu or add it with `Add App…`.
 - **Add an app you have never opened** via `Add App…`, including one that is not running. It
   starts as `(not set)` and does nothing until you pick a layout.
 - **Learn new apps automatically**, off by default. This is the single switch controlling whether
@@ -28,7 +29,7 @@ layout follows.
   The first is useful when the active layout is already the one you want there, since watching
   alone would never see a switch to learn from. It fills in `(not set)` entries too. Leave it off
   and the list stays limited to apps you chose deliberately, via `Add App…` or by picking a
-  layout for them.
+  layout for them. Either way, an app you forgot is never learned again on its own.
 - **Hide the menu bar icon** if you want it out of the way. The app keeps working; relaunching
   brings the icon back.
 - **Launch at login**, off by default.
@@ -274,6 +275,23 @@ the learning toggle. Only the first was, originally, which made `Forget This App
 forgetting an app and then changing layout in it once put the entry straight back, because the
 recording path never asked whether the app was managed. Both paths now answer to the one
 preference, so "off" means the list only ever contains apps you chose.
+
+**Forgetting is remembered, and outranks learning.** Gating both automatic paths on the learning
+toggle still left `Forget This App` a no-op with learning *on*: deleting the entry alone left the
+app eligible, so reopening it learned it straight back. The store therefore records forgotten
+bundle IDs in a `forgotten` list beside `apps`, and automatic learning skips anything in it. A
+specific choice about one app beats a blanket default, so this is checked before the preference.
+
+The mark is cleared by the two acts that name the app directly: picking a layout from its submenu,
+or `Add App…`. Both clear it inside `LayoutStore` rather than at the call sites, so no future
+caller can store a layout while leaving the app marked — a state that would show a saved layout
+that learning then refuses to touch. A hand-switch while the app merely happens to be frontmost
+does *not* clear it: that is about the typing at hand, and treating it as a decision to manage the
+app again would undo the forget as a side effect of ordinary typing.
+
+This is what took the store to schema version 3. Version 1 and 2 files have no `forgotten` key, so
+it decodes as absent-means-empty; without that, every existing install's store would have been
+quarantined as malformed on first launch.
 
 ## Development
 

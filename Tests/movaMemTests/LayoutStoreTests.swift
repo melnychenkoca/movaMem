@@ -48,6 +48,146 @@ private func makeTempFileURL() -> URL {
     #expect(store.allEntries().isEmpty)
 }
 
+// MARK: - Forgotten apps
+
+@Test func removeMarksAppForgotten() {
+    // Forget This App must record the rejection, not just delete the entry.
+    // Deleting alone is what let a forgotten app be re-learned on its next
+    // activation, which read as the forget having silently failed.
+    let store = LayoutStore(fileURL: makeTempFileURL())
+    store.setLayout("com.apple.keylayout.Canadian", forBundleID: "com.todesktop.230313mzl4w4u92")
+
+    #expect(store.isForgotten(bundleID: "com.todesktop.230313mzl4w4u92") == false)
+
+    store.remove(bundleID: "com.todesktop.230313mzl4w4u92")
+
+    #expect(store.isForgotten(bundleID: "com.todesktop.230313mzl4w4u92") == true)
+    #expect(store.isManaged(bundleID: "com.todesktop.230313mzl4w4u92") == false)
+}
+
+@Test func removingAnAppNeverSeenStillMarksItForgotten() {
+    // remove() is reachable for an app with no entry (a stale menu item, a
+    // repeated forget). Marking it anyway is both harmless and more correct:
+    // the user has expressed the same rejection either way.
+    let store = LayoutStore(fileURL: makeTempFileURL())
+    store.remove(bundleID: "com.never.seen")
+    #expect(store.isForgotten(bundleID: "com.never.seen") == true)
+}
+
+@Test func settingALayoutClearsTheForgottenMark() {
+    // Picking a layout by hand is a deliberate act, so it un-forgets. This lives
+    // in the store rather than in the menu so no future call site can forget to
+    // do it — the same reasoning as the guard inside addAppWithNoLayout.
+    let store = LayoutStore(fileURL: makeTempFileURL())
+    store.remove(bundleID: "com.a.app")
+    #expect(store.isForgotten(bundleID: "com.a.app") == true)
+
+    store.setLayout("com.apple.keylayout.French", forBundleID: "com.a.app")
+
+    #expect(store.isForgotten(bundleID: "com.a.app") == false)
+    #expect(store.layout(forBundleID: "com.a.app") == "com.apple.keylayout.French")
+}
+
+@Test func addAppWithNoLayoutClearsTheForgottenMark() {
+    // Add App... is the other deliberate act, and the primary escape hatch for
+    // an app forgotten by mistake.
+    let store = LayoutStore(fileURL: makeTempFileURL())
+    store.remove(bundleID: "com.a.app")
+
+    store.addAppWithNoLayout(bundleID: "com.a.app")
+
+    #expect(store.isForgotten(bundleID: "com.a.app") == false)
+    #expect(store.isManaged(bundleID: "com.a.app") == true)
+}
+
+@Test func forgottenAppsSurviveReload() {
+    // The whole point is that the forget outlives a relaunch. Held in memory
+    // only, the app would learn the entry back the next time it started.
+    let url = makeTempFileURL()
+    let first = LayoutStore(fileURL: url)
+    first.setLayout("com.apple.keylayout.Canadian", forBundleID: "com.a.app")
+    first.remove(bundleID: "com.a.app")
+
+    let second = LayoutStore(fileURL: url)
+    #expect(second.isForgotten(bundleID: "com.a.app") == true)
+    #expect(second.isManaged(bundleID: "com.a.app") == false)
+}
+
+@Test func clearingAForgottenMarkSurvivesReload() {
+    // The clear has to be persisted too, or an un-forgotten app would come back
+    // as forgotten on the next launch and stop being learned again.
+    let url = makeTempFileURL()
+    let first = LayoutStore(fileURL: url)
+    first.remove(bundleID: "com.a.app")
+    first.setLayout("com.apple.keylayout.French", forBundleID: "com.a.app")
+
+    let second = LayoutStore(fileURL: url)
+    #expect(second.isForgotten(bundleID: "com.a.app") == false)
+    #expect(second.layout(forBundleID: "com.a.app") == "com.apple.keylayout.French")
+}
+
+@Test func forgottenListIsPersistedSortedForReadability() throws {
+    // The owner reads this file by hand, and .sortedKeys only orders object
+    // keys — an array's order is whatever we write, so it is sorted explicitly.
+    let url = makeTempFileURL()
+    let store = LayoutStore(fileURL: url)
+    store.remove(bundleID: "zzz.app")
+    store.remove(bundleID: "aaa.app")
+
+    let data = try Data(contentsOf: url)
+    let decoded = try JSONDecoder().decode(StoredLayouts.self, from: data)
+    #expect(decoded.forgotten == ["aaa.app", "zzz.app"])
+}
+
+@Test func forgettingTheSameAppTwiceDoesNotDuplicateIt() {
+    let url = makeTempFileURL()
+    let store = LayoutStore(fileURL: url)
+    store.remove(bundleID: "com.a.app")
+    store.remove(bundleID: "com.a.app")
+
+    let second = LayoutStore(fileURL: url)
+    #expect(second.isForgotten(bundleID: "com.a.app") == true)
+}
+
+@Test func aVersion2FileLoadsWithNothingForgotten() throws {
+    // The upgrade case that matters for existing installs: a v2 file has no
+    // forgotten key at all, and must load with an empty list rather than
+    // failing to decode and being quarantined.
+    let url = makeTempFileURL()
+    let v2 = #"{"version":2,"apps":{"com.microsoft.VSCode":"com.apple.keylayout.Canadian"}}"#
+    try v2.write(to: url, atomically: true, encoding: .utf8)
+
+    let store = LayoutStore(fileURL: url)
+
+    #expect(store.didFailToLoad == false)
+    #expect(store.layout(forBundleID: "com.microsoft.VSCode") == "com.apple.keylayout.Canadian")
+    #expect(store.isForgotten(bundleID: "com.microsoft.VSCode") == false)
+}
+
+@Test func aVersion2FileUpgradesToVersion3OnTheNextWrite() throws {
+    let url = makeTempFileURL()
+    let v2 = #"{"version":2,"apps":{"com.microsoft.VSCode":"com.apple.keylayout.Canadian"}}"#
+    try v2.write(to: url, atomically: true, encoding: .utf8)
+
+    let store = LayoutStore(fileURL: url)
+    store.remove(bundleID: "com.microsoft.VSCode")
+
+    let data = try Data(contentsOf: url)
+    let decoded = try JSONDecoder().decode(StoredLayouts.self, from: data)
+    #expect(decoded.version == 3)
+    #expect(decoded.forgotten == ["com.microsoft.VSCode"])
+}
+
+@Test func aForgottenAppIsNotListedAsAnEntry() {
+    // The forgotten list must not leak into the menu as a row. It is bookkeeping
+    // about apps that are deliberately absent.
+    let store = LayoutStore(fileURL: makeTempFileURL())
+    store.setLayout("com.apple.keylayout.Canadian", forBundleID: "com.a.app")
+    store.remove(bundleID: "com.a.app")
+
+    #expect(store.allEntries().isEmpty)
+}
+
 @Test func allEntriesIsSortedByBundleID() {
     let store = LayoutStore(fileURL: makeTempFileURL())
     store.setLayout("com.apple.keylayout.Canadian", forBundleID: "zzz.app")
@@ -80,10 +220,10 @@ private func makeTempFileURL() -> URL {
 
     let data = try Data(contentsOf: url)
     let decoded = try JSONDecoder().decode(StoredLayouts.self, from: data)
-    // Schema version 2, not 1: this test predates the optional-layout change in
-    // this task, which bumped currentSchemaVersion. See writesUseSchemaVersionTwo
-    // for the test the brief added specifically to cover this.
-    #expect(decoded.version == 2)
+    // Version 3 as of the authoritative-forget change, which added the forgotten
+    // list. It was 2 before that (the optional-layout change) and 1 originally.
+    // See writesUseCurrentSchemaVersion for the dedicated version test.
+    #expect(decoded.version == 3)
     #expect(decoded.apps["com.microsoft.VSCode"] == "com.apple.keylayout.Canadian")
 }
 
@@ -110,7 +250,7 @@ private func makeTempFileURL() -> URL {
 
     let data = try Data(contentsOf: url)
     let decoded = try JSONDecoder().decode(StoredLayouts.self, from: data)
-    #expect(decoded.version == 2)
+    #expect(decoded.version == 3)
     #expect(decoded.apps["com.microsoft.VSCode"] == "com.apple.keylayout.Canadian")
     // And the newly added app is present-but-nil, not missing.
     let slackEntry = decoded.apps["com.tinyspeck.slackmacgap"]
@@ -289,13 +429,14 @@ private func makeTempFileURL() -> URL {
 
 @Test func newerSchemaVersionIsQuarantinedRatherThanAdopted() throws {
     let url = makeTempFileURL()
-    // version 3 with a field this app's StoredLayouts does not know about.
-    // Codable ignores the unknown field silently, so without an explicit
-    // version check this file would decode as if it were a normal current-version
-    // file. Version 3 (not 2) because this task bumped currentSchemaVersion to 2,
-    // so 3 is what is now "newer than this app".
+    // A version one higher than this app understands, carrying a field its
+    // StoredLayouts does not know about. Codable ignores the unknown field
+    // silently, so without an explicit version check this file would decode as if
+    // it were a normal current-version file and the next save would write it back
+    // downgraded, dropping futureField for good. Version 4 because the
+    // authoritative-forget change bumped currentSchemaVersion to 3.
     try """
-    {"version":3,"apps":{"com.apple.Safari":"com.apple.keylayout.US"},"futureField":"x"}
+    {"version":4,"apps":{"com.apple.Safari":"com.apple.keylayout.US"},"futureField":"x"}
     """.write(to: url, atomically: true, encoding: .utf8)
 
     let store = LayoutStore(fileURL: url)
@@ -403,14 +544,14 @@ private func makeTempFileURL() -> URL {
     #expect(second.layout(forBundleID: "com.set.app") == "com.apple.keylayout.French")
 }
 
-@Test func writesUseSchemaVersionTwo() throws {
+@Test func writesUseCurrentSchemaVersion() throws {
     let url = makeTempFileURL()
     let store = LayoutStore(fileURL: url)
     store.setLayout("com.apple.keylayout.Canadian", forBundleID: "com.a.app")
 
     let data = try Data(contentsOf: url)
     let decoded = try JSONDecoder().decode(StoredLayouts.self, from: data)
-    #expect(decoded.version == 2)
+    #expect(decoded.version == 3)
 }
 
 @Test func settingALayoutReplacesUnset() {

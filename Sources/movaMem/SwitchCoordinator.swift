@@ -182,6 +182,15 @@ final class SwitchCoordinator {
     /// genuine switch to this same layout, which is the failure
     /// `cancelNotedLayout()` exists to undo elsewhere.
     private func learnLayoutIfEnabled(forBundleID bundleID: String) {
+        // An explicit forget outranks the learning preference. Forgetting names
+        // one specific app; learning is a blanket default, so the specific choice
+        // wins. Without this the reported bug appeared: forgetting an app you keep
+        // using did nothing at all, because reopening it learned it right back.
+        if store.isForgotten(bundleID: bundleID) {
+            log.debug("Not learning \(bundleID, privacy: .public): the user forgot it")
+            return
+        }
+
         if shouldLearnOnActivation() == false {
             log.debug("No remembered layout for \(bundleID, privacy: .public)")
             return
@@ -235,6 +244,17 @@ final class SwitchCoordinator {
         // is meant to prevent, pointed the other way.
         if store.isManaged(bundleID: bundleID) == false && shouldLearnOnActivation() == false {
             log.debug("Not recording \(newLayout, privacy: .public): \(bundleID, privacy: .public) is not managed")
+            return
+        }
+
+        // A forgotten app is not re-added by a hand-switch either, even with
+        // learning on. Switching layout while an app happens to be frontmost is
+        // about the typing at hand, not a decision to manage that app again —
+        // treating it as one would undo the forget as a side effect of ordinary
+        // typing. Re-adding is done through the app's submenu or Add App..., both
+        // of which name the app and clear the mark via the store.
+        if store.isForgotten(bundleID: bundleID) {
+            log.debug("Not recording \(newLayout, privacy: .public): \(bundleID, privacy: .public) was forgotten")
             return
         }
 

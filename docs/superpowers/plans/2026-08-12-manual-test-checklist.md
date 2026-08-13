@@ -239,11 +239,30 @@ make install && open /Applications/movaMem.app
   With `Learn new apps automatically` OFF, forget Slack, then go to Slack and switch layout by
   hand. Slack must NOT reappear in the menu — an app only enters the list when you add it.
 
-- [ ] **P2-5b: A forgotten app can still be re-learned deliberately**
+- [ ] **P2-5b: A forgotten app stays forgotten with learning ON**
 
-  Turn `Learn new apps automatically` ON, then go to Slack and switch layout by hand. Slack
-  reappears with that layout. Turning learning on is the deliberate act that re-enables this;
-  `Add App…` is the other.
+  This is the case that was broken. Turn `Learn new apps automatically` ON. Forget Cursor, quit
+  Cursor, then reopen it. Cursor must NOT reappear in the menu. Switching layout by hand while
+  Cursor is frontmost must not bring it back either. Check the file directly if you want to see
+  why — its bundle ID should be in the `forgotten` list:
+
+  ```sh
+  cat ~/Library/Application\ Support/movaMem/layouts.json
+  ```
+
+- [ ] **P2-5c: A forgotten app can be managed again deliberately**
+
+  With Cursor still forgotten, pick a layout for it from its submenu — or use `Add App…`. It
+  returns to the list with that layout, and from then on behaves like any other managed app:
+  quit and reopen it, and the layout is restored. These two acts name the app directly, which is
+  what distinguishes them from a hand-switch that happens while it is frontmost.
+
+- [ ] **P2-5d: An existing store file upgrades cleanly**
+
+  Before installing this version, note what is in your `layouts.json`. After launching it and
+  forgetting one app, the file should read `"version" : 3` with a new `forgotten` list, and every
+  other app's layout must be exactly as it was. Nothing should appear in the menu's degraded-state
+  row about a store that failed to load.
 
 - [ ] **P2-6: Add App… adds an app that is not running**
 

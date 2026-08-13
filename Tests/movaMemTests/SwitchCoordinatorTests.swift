@@ -192,6 +192,99 @@ private let french = "com.apple.keylayout.French"
     #expect(store.allEntries().isEmpty)
 }
 
+@Test func aForgottenAppIsNotLearnedOnActivationEvenWithLearningOn() {
+    // The reported bug, reproduced exactly: Cursor had a saved layout, was
+    // forgotten, and came straight back on its next activation because learning
+    // was on. Gating learning on the preference alone was not enough — Forget
+    // This App has to outrank it, or forgetting a running app is a no-op.
+    let cursor = "com.todesktop.230313mzl4w4u92"
+    let input = FakeInputSource(current: canadian, installed: [canadian, french])
+    let monitor = FakeAppMonitor()
+    let store = makeTempStore()
+    store.setLayout(canadian, forBundleID: cursor)
+
+    let coordinator = SwitchCoordinator(
+        inputSource: input,
+        appMonitor: monitor,
+        store: store,
+        shouldLearnOnActivation: { true }
+    )
+    coordinator.start()
+
+    store.remove(bundleID: cursor)          // Forget This App
+    monitor.simulateActivation(of: cursor)  // reopening Cursor
+
+    #expect(store.isManaged(bundleID: cursor) == false)
+    #expect(store.allEntries().isEmpty)
+}
+
+@Test func aForgottenAppIsNotLearnedFromAHandSwitchWithLearningOn() {
+    // The other automatic entry path, closed for a forgotten app by the same
+    // rule. Without this, forgetting an app you then type in would bring it back.
+    let input = FakeInputSource(current: canadian, installed: [canadian, french])
+    let monitor = FakeAppMonitor(frontmost: "us.zoom.xos")
+    let store = makeTempStore()
+    store.setLayout(canadian, forBundleID: "us.zoom.xos")
+
+    let coordinator = SwitchCoordinator(
+        inputSource: input,
+        appMonitor: monitor,
+        store: store,
+        shouldLearnOnActivation: { true }
+    )
+    coordinator.start()
+
+    store.remove(bundleID: "us.zoom.xos")
+    input.simulateUserSwitch(to: french)
+
+    #expect(store.isManaged(bundleID: "us.zoom.xos") == false)
+}
+
+@Test func aForgottenAppIsManagedAgainAfterBeingReAdded() {
+    // Forgetting must be reversible, or a mistaken forget would be permanent.
+    // Add App... clears the mark, after which the app learns and restores like
+    // any other — this is the escape hatch the design depends on.
+    let input = FakeInputSource(current: french, installed: [canadian, french])
+    let monitor = FakeAppMonitor()
+    let store = makeTempStore()
+
+    let coordinator = SwitchCoordinator(
+        inputSource: input,
+        appMonitor: monitor,
+        store: store,
+        shouldLearnOnActivation: { true }
+    )
+    coordinator.start()
+
+    store.remove(bundleID: "com.a.app")
+    store.addAppWithNoLayout(bundleID: "com.a.app")   // Add App...
+
+    monitor.simulateActivation(of: "com.a.app")
+
+    // Learning applies again: the active layout is recorded for the unset entry.
+    #expect(store.layout(forBundleID: "com.a.app") == french)
+}
+
+@Test func anAppThatWasNeverForgottenStillLearnsOnActivation() {
+    // Guards against the forget gate being too broad and blocking normal
+    // learning — the failure mode opposite to the bug being fixed.
+    let input = FakeInputSource(current: canadian, installed: [canadian, french])
+    let monitor = FakeAppMonitor()
+    let store = makeTempStore()
+
+    let coordinator = SwitchCoordinator(
+        inputSource: input,
+        appMonitor: monitor,
+        store: store,
+        shouldLearnOnActivation: { true }
+    )
+    coordinator.start()
+
+    monitor.simulateActivation(of: "com.fresh.app")
+
+    #expect(store.layout(forBundleID: "com.fresh.app") == canadian)
+}
+
 @Test func userLayoutChangeInAnUnmanagedAppIsRecordedWhenLearningIsOn() {
     // Learning on is the user asking for exactly this. The guard must gate the
     // hand-switch path on the preference, not block it outright.

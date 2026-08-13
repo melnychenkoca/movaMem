@@ -12,6 +12,37 @@ struct StoredLayouts: Codable {
     /// encodes as an explicit JSON null rather than an omitted key, which is what
     /// keeps "unset" distinguishable from "never seen" across a reload.
     var apps: [String: String?]
+
+    /// Bundle IDs the user explicitly chose to forget.
+    ///
+    /// Kept so that automatic learning cannot re-add an app the user rejected.
+    /// Without it, forgetting an app you keep using was effectively a no-op with
+    /// learning on: the next activation learned it straight back.
+    ///
+    /// A sorted array on disk rather than a set, because JSON has no set type and
+    /// the owner reads this file by hand. Note that `.sortedKeys` only orders
+    /// object keys, so the sort is applied explicitly when saving.
+    var forgotten: [String]
+
+    /// Decoded explicitly so `forgotten` can default to empty for the v1 and v2
+    /// files that predate it. A synthesized initializer would fail to decode them
+    /// outright, and load() would then quarantine every existing install's store
+    /// as malformed.
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        version = try container.decode(Int.self, forKey: .version)
+        apps = try container.decode([String: String?].self, forKey: .apps)
+        forgotten = try container.decodeIfPresent([String].self, forKey: .forgotten) ?? []
+    }
+
+    /// Written out because declaring `init(from:)` above suppresses the
+    /// synthesized memberwise initializer. `forgotten` defaults to empty since
+    /// LayoutStore fills it from its own set when saving.
+    init(version: Int, apps: [String: String?], forgotten: [String] = []) {
+        self.version = version
+        self.apps = apps
+        self.forgotten = forgotten
+    }
 }
 
 /// Remembers which keyboard layout belongs to which application.
@@ -23,6 +54,12 @@ final class LayoutStore {
     private let log = Logger(subsystem: "com.movamem.app", category: "LayoutStore")
 
     private var layouts: StoredLayouts
+
+    /// The forgotten bundle IDs, held as a Set for O(1) membership checks — this
+    /// is read on every app activation. `layouts.forgotten` is the on-disk array
+    /// form; this is the authority in memory, and save() derives the array from
+    /// it so the two cannot drift.
+    private var forgotten: Set<String> = []
 
     /// False once a disk write has failed. The menu shows a degraded-state row
     /// when this is false. The app keeps working in memory either way.
@@ -42,7 +79,7 @@ final class LayoutStore {
     /// prevent.
     private var quarantineFailed = false
 
-    private static let currentSchemaVersion = 2
+    private static let currentSchemaVersion = 3
 
     init(fileURL: URL) {
         self.fileURL = fileURL
@@ -77,6 +114,17 @@ final class LayoutStore {
         return layouts.apps.index(forKey: bundleID) != nil
     }
 
+    /// True when the user explicitly forgot this app and has not re-added it.
+    ///
+    /// SwitchCoordinator consults this before learning an app automatically, so a
+    /// forgotten app stays out of the store no matter how often it is activated.
+    /// This outranks the learning preference deliberately: forgetting names one
+    /// specific app, while learning is a blanket default, and the specific choice
+    /// should win.
+    func isForgotten(bundleID: String) -> Bool {
+        return forgotten.contains(bundleID)
+    }
+
     /// All entries, sorted by bundle ID so the menu order is stable between openings.
     ///
     /// An entry whose layoutID is nil is managed but unset; the menu shows it as
@@ -101,6 +149,12 @@ final class LayoutStore {
 
     func setLayout(_ layoutID: String, forBundleID bundleID: String) {
         layouts.apps[bundleID] = layoutID
+        // Choosing a layout is a deliberate act, so it un-forgets the app. This
+        // lives here rather than in the callers so no future call site can set a
+        // layout while leaving the app marked forgotten — which would store a
+        // layout that automatic learning then refuses to touch, a state with no
+        // way for the user to make sense of it.
+        forgotten.remove(bundleID)
         save()
     }
 
@@ -123,11 +177,24 @@ final class LayoutStore {
         // `layouts.apps[bundleID] = nil` would REMOVE the key instead — that is
         // how dictionary subscript assignment works with optionals.
         layouts.apps[bundleID] = .some(nil)
+        // Add App... is the other deliberate act, and the escape hatch for an app
+        // forgotten by mistake. See the note in setLayout.
+        forgotten.remove(bundleID)
         save()
     }
 
+    /// Forgets an app: drops its entry and records that the user rejected it.
+    ///
+    /// The mark is what makes Forget This App stick. Deleting the entry alone left
+    /// the app eligible for automatic learning, so with "Learn new apps
+    /// automatically" on, the very next activation put it straight back and the
+    /// forget looked broken.
     func remove(bundleID: String) {
         layouts.apps.removeValue(forKey: bundleID)
+        // Marked even when there was no entry to delete: a stale menu item or a
+        // repeated forget expresses the same rejection, and recording it is both
+        // harmless and more faithful to what the user asked for.
+        forgotten.insert(bundleID)
         save()
     }
 
@@ -192,6 +259,9 @@ final class LayoutStore {
                 version: LayoutStore.currentSchemaVersion,
                 apps: decoded.apps
             )
+            // The set is the authority from here on; save() writes
+            // layouts.forgotten from it, so it is deliberately not seeded above.
+            forgotten = Set(decoded.forgotten)
             if decoded.version != LayoutStore.currentSchemaVersion {
                 log.debug("""
                 Upgrading store from version \(decoded.version, privacy: .public) \
@@ -251,6 +321,12 @@ final class LayoutStore {
             let encoder = JSONEncoder()
             // Pretty-printed and key-sorted because the owner reads this file by hand.
             encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+            // Derive the on-disk array from the in-memory set at the moment of
+            // writing, so the two can never disagree. Sorted explicitly because
+            // .sortedKeys orders object keys only, leaving array order to us, and
+            // Set iteration order is not stable between runs — without this the
+            // file would reshuffle on every save and be unreadable in a diff.
+            layouts.forgotten = forgotten.sorted()
             data = try encoder.encode(layouts)
         } catch {
             log.error("Could not encode store: \(error.localizedDescription, privacy: .public)")
