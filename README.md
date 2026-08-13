@@ -24,6 +24,9 @@ layout follows.
 - **Hide the menu bar icon** if you want it out of the way. The app keeps working; relaunching
   brings the icon back.
 - **Launch at login**, off by default.
+- **Shows its version** at the bottom of the menu. There is no Dock icon and no About window, so
+  this is the only way to tell which build is running — worth having when a Homebrew tap is stale
+  or an upgrade did not take.
 
 ### Requires no permissions
 
@@ -110,7 +113,7 @@ rm -rf ~/Library/Application\ Support/movaMem
 |---|---|
 | `make` | Build and assemble `movaMem.app` in the project directory |
 | `make install` | Build, assemble, and copy to `/Applications` |
-| `make test` | Run the test suite (58 tests) |
+| `make test` | Run the test suite (64 tests) |
 | `make build` | Compile only, no bundle |
 | `make clean` | Remove build artifacts and the bundle |
 | `make sign-setup` | Print one-time steps for a stable code signature (optional) |
@@ -167,6 +170,7 @@ Carbon TIS ──"layout → Ukrainian"──┘           │
 | `SwitchCoordinator` | All the policy — what to restore, what to record |
 | `MenuController` | The menu bar item and its menus |
 | `AppPicker` | Decides whether a chosen app can be managed |
+| `AppVersion` | Formats the version row from the bundle's own Info.plist |
 | `main.swift` | Wires the pieces together; no logic of its own |
 
 The two OS wrappers sit behind protocols, so the policy layer is tested against fakes with no OS
@@ -259,4 +263,4 @@ Code style is deliberately plain rather than idiomatic: explicit loops over chai
 `map`/`filter`, named intermediate values, no force-unwraps, and comments that explain *why*. The
 project is reviewed by someone who does not write Swift, so readability beats brevity.
 
-Around 1,300 lines of Swift across 9 files, no third-party dependencies.
+Around 1,350 lines of Swift across 10 files, no third-party dependencies.

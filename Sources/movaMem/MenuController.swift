@@ -207,7 +207,7 @@ extension MenuController: NSMenuDelegate {
     }
 
     /// The fixed items at the bottom of the menu: Launch at Login, Hide Icon,
-    /// and Quit.
+    /// the version, and Quit.
     private func addFooterItems(to menu: NSMenu) {
         let loginItem = NSMenuItem(
             title: "Launch at Login",
@@ -225,6 +225,14 @@ extension MenuController: NSMenuDelegate {
         let hideItem = NSMenuItem(title: "Hide Icon", action: #selector(hideIcon), keyEquivalent: "")
         hideItem.target = self
         menu.addItem(hideItem)
+
+        menu.addItem(NSMenuItem.separator())
+
+        // Display only. Relies on menu.autoenablesItems being false, set in
+        // install() — without that, AppKit would re-enable this at display time.
+        let versionItem = NSMenuItem(title: AppVersion.current(), action: nil, keyEquivalent: "")
+        versionItem.isEnabled = false
+        menu.addItem(versionItem)
 
         let quitItem = NSMenuItem(title: "Quit movaMem", action: #selector(quit), keyEquivalent: "q")
         quitItem.target = self
