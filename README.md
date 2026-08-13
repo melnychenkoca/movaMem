@@ -46,17 +46,27 @@ Requires macOS 14 or later.
 
 ```bash
 brew tap melnychenkoca/movamem
-brew install --cask --no-quarantine movamem
+brew trust --cask melnychenkoca/movamem/movamem
+brew install --cask movamem
+xattr -dr com.apple.quarantine /Applications/movaMem.app
 open /Applications/movaMem.app
 ```
 
-`--no-quarantine` is required. movaMem is built without an Apple Developer ID, so releases are
-ad-hoc signed rather than notarized, and macOS refuses to launch a quarantined app with no
-notarization ticket — reporting it as *"damaged and can't be opened"*. The app is not damaged;
-that is just the message macOS uses.
+Four steps, because movaMem is built without an Apple Developer ID. Each one clears a different
+gate:
 
-If you would rather leave quarantine in place, install without the flag and approve the app once:
-try to open it, let macOS block it, then go to System Settings → Privacy & Security and click
+**`brew trust`** — Homebrew 5 refuses to load casks from third-party taps until you trust them
+explicitly. Without it the install stops before downloading anything.
+
+**`xattr -dr com.apple.quarantine`** — Homebrew marks downloads as quarantined, and macOS refuses
+to launch a quarantined app that is not notarized, calling it *"damaged and can't be opened"*.
+The app is not damaged; that is just the message macOS uses. Removing the attribute clears it.
+
+Note this is what the old `brew install --no-quarantine` flag used to do. That flag was removed in
+Homebrew 5, so any instructions that still mention it will fail with `invalid option`.
+
+If you would rather not strip the attribute, skip that step and approve the app once instead: try
+to open it, let macOS block it, then go to System Settings → Privacy & Security and click
 **Open Anyway**. On macOS 15 and later this is the only manual route — Apple removed the old
 Control-click → Open bypass.
 

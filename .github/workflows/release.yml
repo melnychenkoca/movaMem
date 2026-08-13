@@ -96,12 +96,16 @@ jobs:
 
             ```bash
             brew tap melnychenkoca/movamem
-            brew install --cask --no-quarantine movamem
+            brew trust --cask melnychenkoca/movamem/movamem
+            brew install --cask movamem
+            xattr -dr com.apple.quarantine /Applications/movaMem.app
             ```
 
-            `--no-quarantine` is needed because this build is ad-hoc signed
-            rather than notarized. Without it macOS reports the app as
-            "damaged"; see the README for what that means and the alternative.
+            `brew trust` is required because Homebrew 5 does not load casks from
+            third-party taps until they are trusted. The `xattr` step is required
+            because this build is ad-hoc signed rather than notarized, so macOS
+            otherwise reports it as "damaged". See the README for the
+            System Settings alternative.
 
             ## Cask checksum
 
