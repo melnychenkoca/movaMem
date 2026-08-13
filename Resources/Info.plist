@@ -20,13 +20,13 @@
          unless the pushed tag is v<CFBundleShortVersionString>, which keeps the
          tag, the app, and the Homebrew cask from drifting apart. -->
     <key>CFBundleShortVersionString</key>
-    <string>1.2.0</string>
+    <string>1.2.1</string>
     <!-- The build number. macOS treats this, not the version string above, as
          what distinguishes one build from another, so it must increase on every
          release. Keeping it equal to the version string is the simplest rule
          that satisfies that. -->
     <key>CFBundleVersion</key>
-    <string>1.2.0</string>
+    <string>1.2.1</string>
     <key>LSMinimumSystemVersion</key>
     <string>14.0</string>
     <!-- LSUIElement is what makes this a menu-bar-only app: no Dock icon, no

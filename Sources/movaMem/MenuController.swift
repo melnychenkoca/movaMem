@@ -240,7 +240,7 @@ extension MenuController: NSMenuDelegate {
     }
 
     /// The fixed items at the bottom of the menu: the two learning toggles,
-    /// Launch at Login, Hide Icon, the version, and Quit.
+    /// Launch at Login, Hide Icon, and Quit (which also shows the version).
     private func addFooterItems(to menu: NSMenu) {
         // Grouped with the other switches rather than beside the app list, so
         // every setting sits in one block instead of being split across the menu.
@@ -286,17 +286,78 @@ extension MenuController: NSMenuDelegate {
 
         menu.addItem(NSMenuItem.separator())
 
-        // Display only. Relies on menu.autoenablesItems being false, set in
-        // install() — without that, AppKit would re-enable this at display time.
-        let versionItem = NSMenuItem(title: AppVersion.current(), action: nil, keyEquivalent: "")
-        versionItem.isEnabled = false
-        menu.addItem(versionItem)
+        // The version shares this row rather than taking one of its own above it:
+        // see AppVersion.quitTitle. ⌘Q still draws at the right edge, so the row
+        // reads "Quit movaMem 1.2.0        ⌘Q".
+        let parts = AppVersion.currentQuitTitleParts()
 
-        // Just "Quit": the version row directly above already names the app, so
-        // the usual "Quit <app>" would repeat it two lines apart.
-        let quitItem = NSMenuItem(title: "Quit", action: #selector(quit), keyEquivalent: "q")
+        // The plain title is set too, not just the attributed one: VoiceOver and
+        // any AppKit path that ignores attributedTitle read this, and it is what
+        // the row falls back to rather than an empty label.
+        let quitItem = NSMenuItem(
+            title: parts.command + parts.version,
+            action: #selector(quit),
+            keyEquivalent: "q"
+        )
+
+        quitItem.attributedTitle = Self.styledQuitTitle(parts: parts)
+
         quitItem.target = self
         menu.addItem(quitItem)
+    }
+
+    /// How far from the row's left edge the version starts, in points.
+    ///
+    /// A fixed stop rather than a centred one. Centring would need the menu's
+    /// width, which AppKit derives from the widest row — here, the app list. The
+    /// version would then sit in a different place after every app learned or
+    /// forgotten, and a stop past the natural width stretches the whole menu to
+    /// reach it. A constant lands the version in the same spot on every open.
+    ///
+    /// Sized in em widths of the menu font rather than raw points so it tracks a
+    /// font or accessibility size change instead of crowding the command.
+    private static let versionTabStopEms: CGFloat = 5.5
+
+    /// The Quit row drawn as two runs: the command, then the dimmed version at a
+    /// fixed tab stop.
+    ///
+    /// Static and parameterised so a test can measure the result without a
+    /// controller or a live menu.
+    static func styledQuitTitle(parts: (command: String, version: String)) -> NSAttributedString {
+        // Explicit: setting attributedTitle drops the font AppKit would have
+        // supplied, which would otherwise leave this row in the system font at
+        // the wrong size next to the toggles above it.
+        let font = NSFont.menuFont(ofSize: 0)
+
+        // A tab is what actually moves the version; .center alignment does
+        // nothing, since AppKit lays a menu title out left-aligned inside its own
+        // cell and ignores the paragraph alignment entirely.
+        let style = NSMutableParagraphStyle()
+        let stop = font.pointSize * versionTabStopEms
+        style.tabStops = [NSTextTab(textAlignment: .left, location: stop, options: [:])]
+
+        // Trailing whitespace on the command becomes the tab: the space would
+        // otherwise be drawn before the tab advanced, nudging the stop rightward.
+        let command = parts.command.trimmingCharacters(in: .whitespaces) + "\t"
+
+        let styled = NSMutableAttributedString(
+            string: command,
+            attributes: [.font: font, .paragraphStyle: style]
+        )
+        // Only the name and version are dimmed, so the row still reads as the
+        // Quit command first. disabledControlTextColor is the same grey the
+        // unavailable-layout rows use below, and what AppKit draws ⌘Q in — the
+        // version then matches the key equivalent it sits beside instead of
+        // introducing a third level of contrast.
+        styled.append(NSAttributedString(
+            string: parts.version,
+            attributes: [
+                .font: font,
+                .paragraphStyle: style,
+                .foregroundColor: NSColor.disabledControlTextColor,
+            ]
+        ))
+        return styled
     }
 
     /// Identifies which app and layout a submenu item refers to.
