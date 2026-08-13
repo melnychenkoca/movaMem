@@ -35,6 +35,11 @@ final class AppMonitor: AppMonitoring, @unchecked Sendable {
         "com.apple.controlcenter",
         "com.apple.systemuiserver",
         "com.movamem.app",
+        // The lock screen and the logout transition, not an app the user
+        // switched to. Ignored regardless of the system-app preference: with
+        // that preference on, this would otherwise record layouts against the
+        // moment the screen locked, which is never something the user meant.
+        "com.apple.loginwindow",
     ]
 
     /// The app we are currently waiting on. If another activation arrives first,

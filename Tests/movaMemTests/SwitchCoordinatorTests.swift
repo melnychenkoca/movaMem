@@ -787,3 +787,184 @@ private let french = "com.apple.keylayout.French"
     freshMonitor.simulateActivation(of: "com.tinyspeck.slackmacgap")
     #expect(freshInput.selectCalls == [ukrainian])
 }
+
+// MARK: - System apps
+
+/// Stands in for the Launch Services lookup main.swift performs. Finder is the
+/// system app throughout these tests; everything else is a normal app.
+private let finder = "com.apple.finder"
+private func fakeIsSystemApp(_ bundleID: String) -> Bool {
+    return bundleID == finder
+}
+
+@Test func systemAppIsNotLearnedOnActivationWhenTrackingIsOff() {
+    let input = FakeInputSource(current: ukrainian, installed: [canadian, ukrainian])
+    let monitor = FakeAppMonitor()
+    let store = makeTempStore()
+
+    let coordinator = SwitchCoordinator(
+        inputSource: input,
+        appMonitor: monitor,
+        store: store,
+        shouldLearnOnActivation: { true },
+        shouldLearnSystemApps: { false },
+        isSystemApp: fakeIsSystemApp
+    )
+    coordinator.start()
+
+    monitor.simulateActivation(of: finder)
+    #expect(store.allEntries().isEmpty)
+}
+
+@Test func systemAppIsLearnedOnActivationWhenTrackingIsOn() {
+    let input = FakeInputSource(current: ukrainian, installed: [canadian, ukrainian])
+    let monitor = FakeAppMonitor()
+    let store = makeTempStore()
+
+    let coordinator = SwitchCoordinator(
+        inputSource: input,
+        appMonitor: monitor,
+        store: store,
+        shouldLearnOnActivation: { true },
+        shouldLearnSystemApps: { true },
+        isSystemApp: fakeIsSystemApp
+    )
+    coordinator.start()
+
+    monitor.simulateActivation(of: finder)
+    #expect(store.layout(forBundleID: finder) == ukrainian)
+}
+
+@Test func trackingSystemAppsDoesNotLearnAnythingWhileLearningIsOff() {
+    // The system toggle narrows learning; it must never widen it. On its own it
+    // does nothing at all.
+    let input = FakeInputSource(current: ukrainian, installed: [canadian, ukrainian])
+    let monitor = FakeAppMonitor()
+    let store = makeTempStore()
+
+    let coordinator = SwitchCoordinator(
+        inputSource: input,
+        appMonitor: monitor,
+        store: store,
+        shouldLearnOnActivation: { false },
+        shouldLearnSystemApps: { true },
+        isSystemApp: fakeIsSystemApp
+    )
+    coordinator.start()
+
+    monitor.simulateActivation(of: finder)
+    monitor.simulateActivation(of: "com.tinyspeck.slackmacgap")
+    #expect(store.allEntries().isEmpty)
+}
+
+@Test func normalAppsStillLearnWhenSystemTrackingIsOff() {
+    // The gate must be specific to system apps and not suppress ordinary
+    // learning as a side effect.
+    let input = FakeInputSource(current: ukrainian, installed: [canadian, ukrainian])
+    let monitor = FakeAppMonitor()
+    let store = makeTempStore()
+
+    let coordinator = SwitchCoordinator(
+        inputSource: input,
+        appMonitor: monitor,
+        store: store,
+        shouldLearnOnActivation: { true },
+        shouldLearnSystemApps: { false },
+        isSystemApp: fakeIsSystemApp
+    )
+    coordinator.start()
+
+    monitor.simulateActivation(of: "com.tinyspeck.slackmacgap")
+    #expect(store.layout(forBundleID: "com.tinyspeck.slackmacgap") == ukrainian)
+}
+
+@Test func handSwitchDoesNotAddUnmanagedSystemAppWhenTrackingIsOff() {
+    // The side door: learning is on and the user changes layout while Finder is
+    // frontmost. Finder must not enter the store.
+    let input = FakeInputSource(current: canadian, installed: [canadian, ukrainian])
+    let monitor = FakeAppMonitor(frontmost: finder)
+    let store = makeTempStore()
+
+    let coordinator = SwitchCoordinator(
+        inputSource: input,
+        appMonitor: monitor,
+        store: store,
+        shouldLearnOnActivation: { true },
+        shouldLearnSystemApps: { false },
+        isSystemApp: fakeIsSystemApp
+    )
+    coordinator.start()
+
+    input.simulateUserSwitch(to: ukrainian)
+    #expect(store.allEntries().isEmpty)
+}
+
+// MARK: - System apps: what is already stored keeps working
+
+@Test func alreadyStoredSystemAppIsRestoredEvenWhenTrackingIsOff() {
+    // Rule: the toggle changes what gets added, never what is already there.
+    // An entry added by hand through Add App..., or stored before the toggle was
+    // turned off, must keep being restored.
+    let input = FakeInputSource(current: canadian, installed: [canadian, ukrainian])
+    let monitor = FakeAppMonitor()
+    let store = makeTempStore()
+    store.setLayout(ukrainian, forBundleID: finder)
+
+    let coordinator = SwitchCoordinator(
+        inputSource: input,
+        appMonitor: monitor,
+        store: store,
+        shouldLearnOnActivation: { false },
+        shouldLearnSystemApps: { false },
+        isSystemApp: fakeIsSystemApp
+    )
+    coordinator.start()
+
+    monitor.simulateActivation(of: finder)
+    #expect(input.selectCalls == [ukrainian])
+}
+
+@Test func alreadyManagedSystemAppRecordsHandSwitchesEvenWhenTrackingIsOff() {
+    // A managed system app behaves like any other managed app: the user
+    // changing layout in it updates its entry. The gate applies to joining the
+    // store, not to using it.
+    let input = FakeInputSource(current: canadian, installed: [canadian, ukrainian])
+    let monitor = FakeAppMonitor(frontmost: finder)
+    let store = makeTempStore()
+    store.setLayout(canadian, forBundleID: finder)
+
+    let coordinator = SwitchCoordinator(
+        inputSource: input,
+        appMonitor: monitor,
+        store: store,
+        shouldLearnOnActivation: { false },
+        shouldLearnSystemApps: { false },
+        isSystemApp: fakeIsSystemApp
+    )
+    coordinator.start()
+
+    input.simulateUserSwitch(to: ukrainian)
+    #expect(store.layout(forBundleID: finder) == ukrainian)
+}
+
+@Test func forgottenSystemAppIsNotRelearnedWhenTrackingIsOn() {
+    // An explicit forget still outranks both preferences together.
+    let input = FakeInputSource(current: ukrainian, installed: [canadian, ukrainian])
+    let monitor = FakeAppMonitor()
+    let store = makeTempStore()
+    store.setLayout(canadian, forBundleID: finder)
+    store.remove(bundleID: finder)   // Forget This App: deletes and marks forgotten
+
+    let coordinator = SwitchCoordinator(
+        inputSource: input,
+        appMonitor: monitor,
+        store: store,
+        shouldLearnOnActivation: { true },
+        shouldLearnSystemApps: { true },
+        isSystemApp: fakeIsSystemApp
+    )
+    coordinator.start()
+
+    monitor.simulateActivation(of: finder)
+    #expect(store.layout(forBundleID: finder) == nil)
+}

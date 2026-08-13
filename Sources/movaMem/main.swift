@@ -16,6 +16,42 @@ private func storeFileURL() -> URL {
         .appendingPathComponent("layouts.json")
 }
 
+/// Resolves a bundle ID to a URL and asks SystemAppDetector about it, caching
+/// the answer.
+///
+/// The cache exists because this runs on every app activation, and
+/// urlForApplication is a Launch Services call rather than a free property
+/// read. The answer is also stable in practice — an app does not move between
+/// /Applications and /System while the user is switching to it — so a cache
+/// that lives as long as the process is safe here.
+///
+/// A nil URL means Launch Services could not find the app at all. That is
+/// treated as "not a system app", which fails toward the existing behavior:
+/// the learning preference alone decides, exactly as it did before this
+/// setting existed.
+private let systemAppCache = SystemAppCache()
+
+final class SystemAppCache: @unchecked Sendable {
+    private var known: [String: Bool] = [:]
+    private let lock = NSLock()
+
+    func isSystemApp(bundleID: String) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+
+        if let cached = known[bundleID] {
+            return cached
+        }
+        guard let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID) else {
+            known[bundleID] = false
+            return false
+        }
+        let result = SystemAppDetector.isSystemApp(bundleURL: url)
+        known[bundleID] = result
+        return result
+    }
+}
+
 let store = LayoutStore(fileURL: storeFileURL())
 let inputSource = InputSourceService()
 let appMonitor = AppMonitor()
@@ -26,7 +62,9 @@ let coordinator = SwitchCoordinator(
     store: store,
     // Read on every activation rather than captured once, so toggling the menu
     // item takes effect on the next app switch.
-    shouldLearnOnActivation: { Preferences.learnNewAppsAutomatically }
+    shouldLearnOnActivation: { Preferences.learnNewAppsAutomatically },
+    shouldLearnSystemApps: { Preferences.trackSystemApps },
+    isSystemApp: { systemAppCache.isSystemApp(bundleID: $0) }
 )
 coordinator.start()
 appMonitor.start()

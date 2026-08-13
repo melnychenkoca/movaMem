@@ -76,14 +76,14 @@ final class ToggleRowView: NSView {
 
     /// The width every toggle row asks for.
     ///
-    /// Fixed rather than derived from the label, so both switches land on the same
-    /// right edge. Sizing each row to its own text would put the two switches at
+    /// Fixed rather than derived from the label, so every switch lands on the same
+    /// right edge. Sizing each row to its own text would put the switches at
     /// different x positions — "Launch at Login" is much shorter than "Learn new
-    /// apps automatically" — and two controls of the same kind failing to line up
+    /// apps automatically" — and controls of the same kind failing to line up
     /// is exactly the kind of detail that reads as sloppy.
     ///
-    /// The value covers the longer of the two labels at the menu font plus the gap,
-    /// the switch, and both insets — measured at 264pt for "Learn new apps
+    /// The value covers the longest label at the menu font plus the gap, the
+    /// switch, and both insets — measured at 264pt for "Learn new apps
     /// automatically", with headroom so a small font change does not immediately
     /// push past it. MenuController takes the max of this and the real fitting
     /// width, so a label that outgrows it still cannot clip; it just costs the

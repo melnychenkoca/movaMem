@@ -52,18 +52,63 @@ final class SwitchCoordinator {
     /// never touch global defaults state.
     private let shouldLearnOnActivation: () -> Bool
 
+    /// Whether an app belonging to macOS itself may be learned automatically.
+    /// Backs the "Learn system apps" menu toggle.
+    ///
+    /// This narrows learning; it never widens it. Both this and
+    /// shouldLearnOnActivation must be true for a system app to enter the store
+    /// on its own, so turning this on while learning is off changes nothing.
+    ///
+    /// Deliberately consulted only on the paths that *add* an app. An entry that
+    /// already exists is restored normally whatever this returns — including one
+    /// the user added by hand through Add App…, since naming a specific app
+    /// outranks a blanket default, the same way an explicit forget does below.
+    ///
+    /// A closure for the same two reasons as the preference above: read fresh so
+    /// the menu toggle applies to the very next activation, and it keeps both
+    /// UserDefaults and the Launch Services lookup out of this class, so tests
+    /// pass a plain function and never touch global state.
+    private let isSystemApp: (String) -> Bool
+
+    /// Backs the same toggle as isSystemApp; see that property for why both are
+    /// closures and why they gate only the paths that add an app.
+    private let shouldLearnSystemApps: () -> Bool
+
     init(
         inputSource: InputSourceProviding,
         appMonitor: AppMonitoring,
         store: LayoutStore,
         // Defaults to off, which is both the shipped default and what every
         // pre-existing call site and test expects.
-        shouldLearnOnActivation: @escaping () -> Bool = { false }
+        shouldLearnOnActivation: @escaping () -> Bool = { false },
+        // Defaults to off as the shipped default. The identity here is "nothing
+        // is a system app", which leaves every pre-existing test's behavior
+        // untouched rather than silently gating it on a new condition.
+        shouldLearnSystemApps: @escaping () -> Bool = { false },
+        isSystemApp: @escaping (String) -> Bool = { _ in false }
     ) {
         self.inputSource = inputSource
         self.appMonitor = appMonitor
         self.store = store
         self.shouldLearnOnActivation = shouldLearnOnActivation
+        self.shouldLearnSystemApps = shouldLearnSystemApps
+        self.isSystemApp = isSystemApp
+    }
+
+    /// Whether this app may be brought into the store automatically.
+    ///
+    /// Both learning paths — activation and hand-switch — funnel through here so
+    /// the rule cannot drift between them, which is the failure the existing
+    /// isForgotten checks had to be added twice to prevent.
+    private func mayLearn(bundleID: String) -> Bool {
+        if shouldLearnOnActivation() == false {
+            return false
+        }
+        if isSystemApp(bundleID) && shouldLearnSystemApps() == false {
+            log.debug("Not learning \(bundleID, privacy: .public): it is a system app")
+            return false
+        }
+        return true
     }
 
     /// Installs the event callbacks. Nothing happens until this is called.
@@ -191,7 +236,7 @@ final class SwitchCoordinator {
             return
         }
 
-        if shouldLearnOnActivation() == false {
+        if mayLearn(bundleID: bundleID) == false {
             log.debug("No remembered layout for \(bundleID, privacy: .public)")
             return
         }
@@ -242,7 +287,13 @@ final class SwitchCoordinator {
         // the user fills it in. Testing the layout instead would treat that
         // entry as unmanaged and refuse to record, which is the bug this guard
         // is meant to prevent, pointed the other way.
-        if store.isManaged(bundleID: bundleID) == false && shouldLearnOnActivation() == false {
+        //
+        // mayLearn rather than the learning preference alone, so a system app
+        // cannot enter the store by the side door: with system learning off, a
+        // hand-switch made while Finder is frontmost must not add Finder. The
+        // test is on the unmanaged branch only — an already-managed system app,
+        // however it got there, records hand-switches like anything else.
+        if store.isManaged(bundleID: bundleID) == false && mayLearn(bundleID: bundleID) == false {
             log.debug("Not recording \(newLayout, privacy: .public): \(bundleID, privacy: .public) is not managed")
             return
         }

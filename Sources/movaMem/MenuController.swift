@@ -173,20 +173,6 @@ extension MenuController: NSMenuDelegate {
         addStorageWarning(to: menu)
         addAppEntries(to: menu)
 
-        // Sits directly above Add App... because it is the automatic counterpart
-        // to that manual action: both are how an app joins the list.
-        //
-        // The coordinator reads this preference on every activation, so there is
-        // deliberately nothing to notify here.
-        menu.addItem(makeToggleItem(
-            title: "Learn new apps automatically",
-            isOn: Preferences.learnNewAppsAutomatically,
-            onToggle: { [weak self] newValue in
-                Preferences.learnNewAppsAutomatically = newValue
-                self?.log.debug("Learn new apps automatically: \(newValue, privacy: .public)")
-            }
-        ))
-
         // Grouped with the app list rather than the settings below, because it is
         // a list operation. The trailing ellipsis is the macOS convention for an
         // item that opens a dialog.
@@ -201,10 +187,10 @@ extension MenuController: NSMenuDelegate {
     /// Builds a menu row carrying a ToggleRowView.
     ///
     /// The item has no action or target: the view owns the click, because AppKit
-    /// does not route clicks on a custom view through the item's action. Both
-    /// toggles go through here so they cannot drift apart.
+    /// does not route clicks on a custom view through the item's action. Every
+    /// toggle goes through here so they cannot drift apart.
     ///
-    /// Every toggle row gets the same width, so both switches land on the same
+    /// Every toggle row gets the same width, so the switches all land on the same
     /// right edge instead of tracking their own label lengths. The max() guards the
     /// case where a label is longer than that width allows, which would otherwise
     /// clip the switch — a real frame is required either way, since a zero-height
@@ -253,9 +239,37 @@ extension MenuController: NSMenuDelegate {
         }
     }
 
-    /// The fixed items at the bottom of the menu: Launch at Login, Hide Icon,
-    /// the version, and Quit.
+    /// The fixed items at the bottom of the menu: the two learning toggles,
+    /// Launch at Login, Hide Icon, the version, and Quit.
     private func addFooterItems(to menu: NSMenu) {
+        // Grouped with the other switches rather than beside the app list, so
+        // every setting sits in one block instead of being split across the menu.
+        //
+        // The coordinator reads this preference on every activation, so there is
+        // deliberately nothing to notify here.
+        menu.addItem(makeToggleItem(
+            title: "Learn new apps automatically",
+            isOn: Preferences.learnNewAppsAutomatically,
+            onToggle: { [weak self] newValue in
+                Preferences.learnNewAppsAutomatically = newValue
+                self?.log.debug("Learn new apps automatically: \(newValue, privacy: .public)")
+            }
+        ))
+
+        // Directly below the toggle it qualifies: this narrows what that one
+        // learns, so it reads as a sub-condition of it in that position. It is
+        // shown whatever that toggle's state is, rather than hidden when
+        // learning is off — a control that vanishes is harder to find again than
+        // one that is simply inert, and its own state is still worth seeing.
+        menu.addItem(makeToggleItem(
+            title: "Learn system apps",
+            isOn: Preferences.trackSystemApps,
+            onToggle: { [weak self] newValue in
+                Preferences.trackSystemApps = newValue
+                self?.log.debug("Learn system apps: \(newValue, privacy: .public)")
+            }
+        ))
+
         // The new value is ignored: SMAppService is the source of truth, so
         // setLaunchAtLogin reads its status and flips that. A failed registration
         // then leaves the real state alone and the next menu open shows the truth
