@@ -234,7 +234,9 @@ extension MenuController: NSMenuDelegate {
         versionItem.isEnabled = false
         menu.addItem(versionItem)
 
-        let quitItem = NSMenuItem(title: "Quit movaMem", action: #selector(quit), keyEquivalent: "q")
+        // Just "Quit": the version row directly above already names the app, so
+        // the usual "Quit <app>" would repeat it two lines apart.
+        let quitItem = NSMenuItem(title: "Quit", action: #selector(quit), keyEquivalent: "q")
         quitItem.target = self
         menu.addItem(quitItem)
     }

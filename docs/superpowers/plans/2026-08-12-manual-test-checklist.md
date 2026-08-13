@@ -97,7 +97,10 @@ make install && open /Applications/movaMem.app
 - [ ] **Step 2: Empty state**
 
   Click the icon. Expect a dimmed, unclickable `No apps remembered yet`, then a separator,
-  then `Launch at Login`, `Hide Icon`, `Quit movaMem`.
+  then `Launch at Login`, `Hide Icon`, a separator, a dimmed `movaMem <version>`, and `Quit`.
+
+  The version must match `CFBundleShortVersionString` in the bundle's `Info.plist`. It is read
+  at runtime, so a mismatch means the wrong bundle is running — worth checking after an upgrade.
 
 - [ ] **Step 3: Teach it three apps**
 
