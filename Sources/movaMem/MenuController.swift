@@ -85,7 +85,9 @@ final class MenuController: NSObject {
         log.debug("Icon hidden; relaunch the app to bring it back")
     }
 
-    @objc private func toggleLaunchAtLogin() {
+    /// Flips launch-at-login from the service's own status. Not an @objc action:
+    /// the switch row calls it directly rather than through a selector.
+    private func setLaunchAtLogin() {
         let service = SMAppService.mainApp
         do {
             if service.status == .enabled {
@@ -96,15 +98,6 @@ final class MenuController: NSObject {
         } catch {
             log.error("Could not change launch-at-login: \(error.localizedDescription, privacy: .public)")
         }
-    }
-
-    // No need to notify the coordinator: it reads this preference through a
-    // closure on every activation, so the new value applies to the next app
-    // switch on its own. There is deliberately nothing to keep in sync here.
-    @objc private func toggleLearnNewApps() {
-        let newValue = Preferences.learnNewAppsAutomatically == false
-        Preferences.learnNewAppsAutomatically = newValue
-        log.debug("Learn new apps automatically: \(newValue, privacy: .public)")
     }
 
     @objc private func quit() {
@@ -182,18 +175,17 @@ extension MenuController: NSMenuDelegate {
 
         // Sits directly above Add App... because it is the automatic counterpart
         // to that manual action: both are how an app joins the list.
-        let learnItem = NSMenuItem(
+        //
+        // The coordinator reads this preference on every activation, so there is
+        // deliberately nothing to notify here.
+        menu.addItem(makeToggleItem(
             title: "Learn new apps automatically",
-            action: #selector(toggleLearnNewApps),
-            keyEquivalent: ""
-        )
-        learnItem.target = self
-        if Preferences.learnNewAppsAutomatically {
-            learnItem.state = .on
-        } else {
-            learnItem.state = .off
-        }
-        menu.addItem(learnItem)
+            isOn: Preferences.learnNewAppsAutomatically,
+            onToggle: { [weak self] newValue in
+                Preferences.learnNewAppsAutomatically = newValue
+                self?.log.debug("Learn new apps automatically: \(newValue, privacy: .public)")
+            }
+        ))
 
         // Grouped with the app list rather than the settings below, because it is
         // a list operation. The trailing ellipsis is the macOS convention for an
@@ -205,6 +197,37 @@ extension MenuController: NSMenuDelegate {
         menu.addItem(NSMenuItem.separator())
         addFooterItems(to: menu)
     }
+
+    /// Builds a menu row carrying a ToggleRowView.
+    ///
+    /// The item has no action or target: the view owns the click, because AppKit
+    /// does not route clicks on a custom view through the item's action. Both
+    /// toggles go through here so they cannot drift apart.
+    ///
+    /// The frame comes from fittingSize rather than a fixed number — too narrow
+    /// clips the switch off the right edge, too wide pads the menu out — and a
+    /// real frame is required at all, since a zero-height view renders as a sliver.
+    private func makeToggleItem(
+        title: String,
+        isOn: Bool,
+        onToggle: @escaping (Bool) -> Void
+    ) -> NSMenuItem {
+        let item = NSMenuItem()
+        let row = ToggleRowView(title: title, isOn: isOn, onToggle: onToggle)
+        let fitting = row.fittingSize
+        row.frame = NSRect(
+            x: 0,
+            y: 0,
+            width: max(fitting.width, MenuController.minimumToggleRowWidth),
+            height: fitting.height
+        )
+        item.view = row
+        return item
+    }
+
+    /// A floor only, so a short label still gives a comfortable row. Menus size to
+    /// their widest row, so the app rows above usually win anyway.
+    private static let minimumToggleRowWidth: CGFloat = 220
 
     /// A load failure is the more serious problem — it means the layouts the
     /// user already had are gone from memory this launch, not just that new
@@ -235,18 +258,15 @@ extension MenuController: NSMenuDelegate {
     /// The fixed items at the bottom of the menu: Launch at Login, Hide Icon,
     /// the version, and Quit.
     private func addFooterItems(to menu: NSMenu) {
-        let loginItem = NSMenuItem(
+        // The new value is ignored: SMAppService is the source of truth, so
+        // setLaunchAtLogin reads its status and flips that. A failed registration
+        // then leaves the real state alone and the next menu open shows the truth
+        // rather than an optimistic switch position.
+        menu.addItem(makeToggleItem(
             title: "Launch at Login",
-            action: #selector(toggleLaunchAtLogin),
-            keyEquivalent: ""
-        )
-        loginItem.target = self
-        if SMAppService.mainApp.status == .enabled {
-            loginItem.state = .on
-        } else {
-            loginItem.state = .off
-        }
-        menu.addItem(loginItem)
+            isOn: SMAppService.mainApp.status == .enabled,
+            onToggle: { [weak self] _ in self?.setLaunchAtLogin() }
+        ))
 
         let hideItem = NSMenuItem(title: "Hide Icon", action: #selector(hideIcon), keyEquivalent: "")
         hideItem.target = self

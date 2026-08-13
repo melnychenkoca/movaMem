@@ -152,7 +152,7 @@ rm -rf ~/Library/Application\ Support/movaMem
 |---|---|
 | `make` | Build and assemble `movaMem.app` in the project directory |
 | `make install` | Build, assemble, and copy to `/Applications` |
-| `make test` | Run the test suite ß|
+| `make test` | Run the test suite (79 tests) |
 | `make build` | Compile only, no bundle |
 | `make clean` | Remove build artifacts and the bundle |
 | `make sign-setup` | Print one-time steps for a stable code signature (optional) |
@@ -217,6 +217,7 @@ Carbon TIS ──"layout → Ukrainian"──┘           │
 | `AppPicker` | Decides whether a chosen app can be managed |
 | `AppVersion` | Formats the version row from the bundle's own Info.plist |
 | `Preferences` | The settings that persist across launches |
+| `ToggleRowView` | A menu row that shows a real switch instead of a checkmark |
 | `StatusGlyph` | Draws the "mM" menu bar glyph as a template image |
 | `Tools/make-icon.swift` | Draws the app icon; not part of the app target |
 | `main.swift` | Wires the pieces together; no logic of its own |
@@ -239,6 +240,14 @@ breaks on both, intermittently. Storing *which* layout we selected is immune to 
 **Availability comes from the OS, every time the menu opens.** A layout you uninstall shows as
 `(unavailable)` and dimmed, and returns to normal when you reinstall it — with no stale cached
 state in between.
+
+**The two settings use switches, not checkmarks.** `NSMenuItem.state` can only draw a checkmark,
+so a switch means replacing the row with a custom view — and taking over the label, the pointer
+highlight, and the click that AppKit would otherwise handle. Both toggles go through the same
+row type so they cannot drift apart, and the fonts, colors, and metrics come from AppKit
+(`menuFont`, `selectedContentBackgroundColor`, `fittingSize`) rather than hardcoded values that
+would only look right on one macOS version. Clicking anywhere on the row toggles it, matching how
+a standard menu item behaves across its full width.
 
 **Learning on activation records without selecting.** "Learn new apps automatically" saves the
 layout that is *already* active, so there is nothing to switch to. It must therefore leave the
