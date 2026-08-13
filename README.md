@@ -118,7 +118,7 @@ rm -rf ~/Library/Application\ Support/movaMem
 |---|---|
 | `make` | Build and assemble `movaMem.app` in the project directory |
 | `make install` | Build, assemble, and copy to `/Applications` |
-| `make test` | Run the test suite (79 tests) |
+| `make test` | Run the test suite ß|
 | `make build` | Compile only, no bundle |
 | `make clean` | Remove build artifacts and the bundle |
 | `make sign-setup` | Print one-time steps for a stable code signature (optional) |
@@ -222,5 +222,3 @@ launch at login across a reboot).
 Code style is deliberately plain rather than idiomatic: explicit loops over chained
 `map`/`filter`, named intermediate values, no force-unwraps, and comments that explain *why*. The
 project is reviewed by someone who does not write Swift, so readability beats brevity.
-
-Around 1,475 lines of Swift across 11 files, no third-party dependencies.
