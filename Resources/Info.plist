@@ -12,8 +12,11 @@
     <string>movaMem</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
+    <!-- The release is driven from this value: the workflow refuses to publish
+         unless the pushed tag is v<CFBundleShortVersionString>, which keeps the
+         tag, the app, and the Homebrew cask from drifting apart. -->
     <key>CFBundleShortVersionString</key>
-    <string>1.0</string>
+    <string>1.0.0</string>
     <key>CFBundleVersion</key>
     <string>1</string>
     <key>LSMinimumSystemVersion</key>

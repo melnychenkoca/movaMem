@@ -179,20 +179,48 @@ state in between.
 
 ## Releasing
 
-Pushing a version tag builds and publishes a release:
+`Resources/Info.plist` holds the version. Releasing is bumping it and tagging to match:
 
 ```bash
-git tag v1.0.0
-git push origin v1.0.0
+# 1. Bump CFBundleShortVersionString in Resources/Info.plist, e.g. to 1.1.0
+git commit -am "Version 1.1.0"
+git push
+
+# 2. Tag it
+git tag v1.1.0
+git push origin v1.1.0
 ```
 
-[`.github/workflows/release.yml`](.github/workflows/release.yml) runs the tests, builds the
-universal bundle, verifies the asset really is universal and correctly signed, attaches
-`movaMem.zip` to the GitHub release, and prints its SHA256.
+[`.github/workflows/release.yml`](.github/workflows/release.yml) then runs the tests, builds the
+universal bundle, verifies the asset really is universal and correctly signed, publishes
+`movaMem.zip` to the GitHub release, and updates the Homebrew cask.
 
-Then update the cask in the
-[tap repository](https://github.com/melnychenkoca/homebrew-movamem) with the new `version` and
-that `sha256`.
+The tag and `CFBundleShortVersionString` **must** match, and the workflow fails if they do not.
+Without that check a tag can ship an app reporting a different version than Homebrew recorded,
+which makes `brew upgrade` misjudge what is current.
+
+### Cask updates
+
+The workflow pushes the new `version` and `sha256` to the
+[tap repository](https://github.com/melnychenkoca/homebrew-movamem) automatically. This needs a
+token, because the default `GITHUB_TOKEN` can only write to this repository:
+
+1. Create a [fine-grained personal access token](https://github.com/settings/personal-access-tokens/new)
+   scoped to **only** `melnychenkoca/homebrew-movamem`, with **Repository permissions →
+   Contents → Read and write**
+2. Add it to this repository as a secret named `TAP_TOKEN`
+   (Settings → Secrets and variables → Actions → New repository secret)
+
+Without the secret the release still succeeds — the tap steps skip, and the workflow log prints
+the `sha256` to paste into the cask by hand.
+
+### Automating the tag too
+
+Tags are deliberately manual: a release should be an explicit act, and the first few are worth
+watching. If that becomes tedious, the natural next step is a small workflow that tags whenever
+`CFBundleShortVersionString` changes on `main` — keeping the plist as the single trigger rather
+than introducing commit-message conventions. Worth adding only once the pipeline has proven
+itself over a few manual releases.
 
 ## Development
 

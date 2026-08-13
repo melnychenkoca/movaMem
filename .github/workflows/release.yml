@@ -22,12 +22,35 @@ jobs:
     # so the runner architecture does not limit what ships.
     runs-on: macos-15
 
+    # Job-level so the tap steps can test for the token in their `if:`. The
+    # secrets context is not available in a conditional, and a step's own env
+    # block is not documented as visible to its own `if:`, so it must live here.
+    env:
+      TAP_TOKEN: ${{ secrets.TAP_TOKEN }}
+
     steps:
       - name: Check out
         uses: actions/checkout@v4
 
       - name: Show toolchain
         run: swift --version
+
+      - name: Check the tag matches the app version
+        # Info.plist is the single source of truth for the version. Without this
+        # check a tag can ship an app that reports a different version than
+        # Homebrew recorded, and `brew upgrade` then misjudges what is current.
+        # Failing here costs a re-tag; failing silently ships a bad release.
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          set -euo pipefail
+          plist_version=$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" Resources/Info.plist)
+          tag_version="${GITHUB_REF_NAME#v}"
+          echo "Info.plist: $plist_version"
+          echo "Tag:        $tag_version"
+          if [ "$plist_version" != "$tag_version" ]; then
+            echo "::error::Tag v$tag_version does not match CFBundleShortVersionString $plist_version. Bump Resources/Info.plist, or re-tag to match it."
+            exit 1
+          fi
 
       - name: Run tests
         run: make test
@@ -85,3 +108,62 @@ jobs:
             ```
             sha256 "${{ steps.checksum.outputs.sha256 }}"
             ```
+
+      # --- Update the Homebrew tap ---------------------------------------
+      # Needs a token with contents:write on the tap repo, because the default
+      # GITHUB_TOKEN is scoped to this repository only. If the secret is absent
+      # the release still succeeds and the cask is updated by hand — see README.
+
+      - name: Check out the tap
+        if: startsWith(github.ref, 'refs/tags/') && env.TAP_TOKEN != ''
+        uses: actions/checkout@v4
+        with:
+          repository: melnychenkoca/homebrew-movamem
+          token: ${{ secrets.TAP_TOKEN }}
+          path: tap
+
+      - name: Point the cask at this release
+        if: startsWith(github.ref, 'refs/tags/') && env.TAP_TOKEN != ''
+        env:
+          VERSION: ${{ github.ref_name }}
+          SHA256: ${{ steps.checksum.outputs.sha256 }}
+          BOT_NAME: github-actions[bot]
+          BOT_EMAIL: 41898282+github-actions[bot]@users.noreply.github.com
+        run: |
+          set -euo pipefail
+          version="${VERSION#v}"
+          cask=tap/Casks/movamem.rb
+
+          # Rewrite only the two release-specific stanzas, anchored to the start
+          # of the line so the url's "v#{version}" interpolation is untouched.
+          /usr/bin/sed -i '' -E \
+            -e "s|^  version \".*\"|  version \"${version}\"|" \
+            -e "s|^  sha256 \".*\"|  sha256 \"${SHA256}\"|" \
+            "$cask"
+
+          # The placeholder comment describes a value that is now filled in by
+          # this job, so drop it the first time through.
+          /usr/bin/sed -i '' \
+            -e '/# Replaced on each release with the checksum printed by/d' \
+            -e '/# Until the first tag is pushed there is no asset to hash, so this is a/d' \
+            -e '/# placeholder and `brew install` will fail on mismatch by design./d' \
+            "$cask"
+
+          echo "--- cask after update ---"
+          head -12 "$cask"
+
+          # Fail loudly rather than pushing a cask that still has a placeholder.
+          if grep -q "REPLACE_WITH_RELEASE_SHA256" "$cask"; then
+            echo "::error::sha256 was not substituted in the cask"
+            exit 1
+          fi
+
+          cd tap
+          if git diff --quiet; then
+            echo "Cask already up to date; nothing to push."
+            exit 0
+          fi
+          git config user.name "$BOT_NAME"
+          git config user.email "$BOT_EMAIL"
+          git commit -am "movamem ${version}"
+          git push
