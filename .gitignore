@@ -3,9 +3,11 @@
 .swiftpm/
 Package.resolved
 
-# Build output — the assembled app bundle and the release zip
+# Build output — the assembled app bundle, the release zip, and the generated
+# icon (drawn by Tools/make-icon.swift, never edited by hand)
 movaMem.app/
 movaMem.zip
+Resources/AppIcon.icns
 
 # Subagent-driven development scratch (ledger, briefs, review packages)
 .superpowers/

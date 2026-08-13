@@ -18,7 +18,7 @@ build:
 	swift build -c release
 
 clean:
-	rm -rf .build movaMem.app
+	rm -rf .build movaMem.app Resources/AppIcon.icns
 
 APP_NAME   = movaMem
 APP_BUNDLE = $(APP_NAME).app
@@ -34,16 +34,26 @@ ARM64_BINARY  = .build/arm64-apple-macosx/release/$(APP_NAME)
 X86_64_BINARY = .build/x86_64-apple-macosx/release/$(APP_NAME)
 UNIVERSAL_BINARY = .build/universal/$(APP_NAME)
 
-.PHONY: bundle install sign-setup build-universal bundle-universal dist
+APP_ICON = Resources/AppIcon.icns
+
+.PHONY: bundle install sign-setup build-universal bundle-universal dist icon
+
+# The icon is drawn by a script rather than checked in, so it can be reviewed
+# as code. Regenerated whenever the script changes.
+icon: $(APP_ICON)
+
+$(APP_ICON): Tools/make-icon.swift
+	swift Tools/make-icon.swift $(APP_ICON)
 
 # Assembles the .app directory structure by hand, which is what Xcode would
 # otherwise do for us.
-bundle: build
+bundle: build $(APP_ICON)
 	rm -rf $(APP_BUNDLE)
 	mkdir -p $(APP_BUNDLE)/Contents/MacOS
 	mkdir -p $(APP_BUNDLE)/Contents/Resources
 	cp $(BINARY) $(APP_BUNDLE)/Contents/MacOS/$(APP_NAME)
 	cp Resources/Info.plist $(APP_BUNDLE)/Contents/Info.plist
+	cp $(APP_ICON) $(APP_BUNDLE)/Contents/Resources/AppIcon.icns
 	@# Sign with the local certificate if it exists, otherwise ad-hoc sign.
 	@# Ad-hoc works fine but its identity changes every build.
 	@if security find-certificate -c "movaMem Local" >/dev/null 2>&1; then \
@@ -71,12 +81,13 @@ build-universal:
 	lipo -create -output $(UNIVERSAL_BINARY) $(ARM64_BINARY) $(X86_64_BINARY)
 	@echo "Universal binary: $$(lipo -archs $(UNIVERSAL_BINARY))"
 
-bundle-universal: build-universal
+bundle-universal: build-universal $(APP_ICON)
 	rm -rf $(APP_BUNDLE)
 	mkdir -p $(APP_BUNDLE)/Contents/MacOS
 	mkdir -p $(APP_BUNDLE)/Contents/Resources
 	cp $(UNIVERSAL_BINARY) $(APP_BUNDLE)/Contents/MacOS/$(APP_NAME)
 	cp Resources/Info.plist $(APP_BUNDLE)/Contents/Info.plist
+	cp $(APP_ICON) $(APP_BUNDLE)/Contents/Resources/AppIcon.icns
 	@# Ad-hoc signing is required, not cosmetic: an unsigned binary will not
 	@# execute at all on Apple Silicon. It is not notarization — see README.
 	codesign --force --sign - $(APP_BUNDLE)
